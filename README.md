@@ -194,80 +194,207 @@ hr-genai-agent-platform/
 This project is built incrementally — each phase delivers a working, evaluated feature before moving to the next.
 
 ### Phase 0 — Foundation
-**Goal:** Project scaffold, Docker infrastructure, database setup, basic Streamlit UI calling a FastAPI stub.
-**Components:** Docker Compose, PostgreSQL, ChromaDB, FastAPI skeleton, Streamlit chat UI, seed data.
-**DeepEval:** Install and configure. Folder structure created. No tests yet.
-**Exit criteria:** Streamlit sends a message → FastAPI returns a hardcoded reply → visible in chat UI.
+
+**Goal:**
+Project scaffold, Docker infrastructure, database setup, basic Streamlit UI calling a FastAPI stub.
+
+**Components:**
+- Docker Compose
+- PostgreSQL
+- ChromaDB
+- FastAPI skeleton
+- Streamlit chat UI
+- Seed data
+
+**DeepEval:**
+Install and configure. Folder structure created. No tests yet.
+
+**Exit Criteria:**
+Streamlit sends a message → FastAPI returns a hardcoded reply → visible in chat UI.
 
 ---
 
 ### Phase 1 — LLM Chat
+
 **Goal:** First working AI. GPT-4o responds in the Streamlit chat interface via FastAPI.
-**Components:** LangChain ChatOpenAI, streaming responses, conversation memory, HR system prompt.
-**DeepEval metrics:** `GEval` (role adherence), `AnswerRelevancyMetric`, `HallucinationMetric`.
-**Exit criteria:** Chat works end-to-end. DeepEval tests pass with threshold ≥ 0.7.
+
+**Components:**
+- LangChain ChatOpenAI
+- Streaming responses
+- Conversation memory
+- HR system prompt
+
+**DeepEval Metrics:**
+- `GEval` — role adherence
+- `AnswerRelevancyMetric`
+- `HallucinationMetric`
+
+**Exit Criteria:** Chat works end-to-end. DeepEval tests pass with threshold ≥ 0.7.
 
 ---
 
 ### Phase 2 — Document RAG
-**Goal:** Ground LLM responses in real HR policy documents.
-**Components:** PDF ingestion (PyMuPDF), ChromaDB vector store, LangChain RAG chain, source citation in UI.
-**Documents ingested:** Leave policy, code of conduct, benefits guide, employee handbook.
-**DeepEval metrics:** `AnswerRelevancyMetric`, `FaithfulnessMetric`, `ContextualPrecisionMetric`, `ContextualRecallMetric`, RAGAS score.
-**Exit criteria:** "What is the parental leave policy?" returns a grounded, cited answer. All 4 RAG metrics pass.
+
+**Goal:**
+Ground LLM responses in real HR policy documents.
+
+**Components:**
+- PDF ingestion (PyMuPDF)
+- ChromaDB vector store
+- LangChain RAG chain
+- Source citation in UI
+
+**Documents Ingested:**
+- Leave policy
+- Code of conduct
+- Benefits guide
+- Employee handbook
+
+**DeepEval Metrics:**
+- `AnswerRelevancyMetric`
+- `FaithfulnessMetric`
+- `ContextualPrecisionMetric`
+- `ContextualRecallMetric`
+- RAGAS score
+
+**Exit Criteria:**
+"What is the parental leave policy?" returns a grounded, cited answer. All 4 RAG metrics pass.
 
 ---
 
 ### Phase 3 — Database RAG + Hybrid Retrieval
-**Goal:** Add structured employee data as a second knowledge source. Query both simultaneously.
-**Components:** Embed PostgreSQL records into ChromaDB, hybrid retriever merging both RAGs.
-**DeepEval metrics:** `FaithfulnessMetric`, `ContextualRelevancyMetric`, `HallucinationMetric`.
-**Exit criteria:** "What is Sarah's leave balance and what does the policy say about carryover?" returns accurate data from both sources.
+
+**Goal:**
+Add structured employee data as a second knowledge source. Query both simultaneously.
+
+**Components:**
+- Embed PostgreSQL records into ChromaDB
+- Hybrid retriever merging both RAGs
+
+**DeepEval Metrics:**
+- `FaithfulnessMetric`
+- `ContextualRelevancyMetric`
+- `HallucinationMetric`
+
+**Exit Criteria:**
+"What is Sarah's leave balance and what does the policy say about carryover?" returns accurate data from both sources.
 
 ---
 
 ### Phase 4 — Vector Search + Single Agent
-**Goal:** First reasoning agent. Decides which tool to call based on the question.
-**Components:** Semantic search API, LangChain agent with 3 tools (search_policies, lookup_employee, search_knowledge_base).
-**DeepEval metrics:** `TaskCompletionMetric`, `ToolCorrectnessMetric`, `GoalAccuracyMetric`.
-**Exit criteria:** Mixed query triggers correct tools. Tool Correctness ≥ 0.8.
+
+**Goal:**
+First reasoning agent. Decides which tool to call based on the question.
+
+**Components:**
+- Semantic search API
+- LangChain agent with 3 tools:
+  - `search_policies`
+  - `lookup_employee`
+  - `search_knowledge_base`
+
+**DeepEval Metrics:**
+- `TaskCompletionMetric`
+- `ToolCorrectnessMetric`
+- `GoalAccuracyMetric`
+
+**Exit Criteria:**
+Mixed query triggers correct tools. Tool Correctness ≥ 0.8.
 
 ---
 
 ### Phase 5 — MCP Server
-**Goal:** Give the agent real actions — not just retrieval but writes to the database.
-**Components:** FastMCP server with 3 tools: check_leave_balance, submit_leave_request, get_org_chart.
-**DeepEval metrics:** `MCPTaskCompletionMetric`, `MCPUseMetric`, `MultiTurnMCPUseMetric`.
-**Exit criteria:** "Check John's leave and submit a request for Dec 25–27" executes correctly against PostgreSQL.
+
+**Goal:**
+Give the agent real actions — not just retrieval but writes to the database.
+
+**Components:**
+- FastMCP server with 3 tools:
+  - `check_leave_balance`
+  - `submit_leave_request`
+  - `get_org_chart`
+
+**DeepEval Metrics:**
+- `MCPTaskCompletionMetric`
+- `MCPUseMetric`
+- `MultiTurnMCPUseMetric`
+
+**Exit Criteria:**
+"Check John's leave and submit a request for Dec 25–27" executes correctly against PostgreSQL.
 
 ---
 
 ### Phase 6 — Multi-Agent LangGraph Orchestration
-**Goal:** Route queries to specialist agents based on intent. Aggregate responses from multiple agents.
-**Components:** LangGraph orchestrator graph, AgentState, intent router, 4 specialist agents (Policy, Leave, Onboarding, Payroll), human-in-the-loop node.
-**DeepEval metrics:** `TaskCompletionMetric`, `ToolCorrectnessMetric`, `StepEfficiencyMetric`, `PlanAdherenceMetric`, `PlanQualityMetric`.
-**Exit criteria:** "I'm a new hire — what do I need to know about leave and benefits?" routes to Onboarding + Leave agents and returns a combined response.
+
+**Goal:**
+Route queries to specialist agents based on intent. Aggregate responses from multiple agents.
+
+**Components:**
+- LangGraph orchestrator graph
+- AgentState (shared state across agents)
+- Intent router
+- 4 specialist agents:
+  - `Policy Agent`
+  - `Leave Agent`
+  - `Onboarding Agent`
+  - `Payroll Agent`
+- Human-in-the-loop node
+
+**DeepEval Metrics:**
+- `TaskCompletionMetric`
+- `ToolCorrectnessMetric`
+- `StepEfficiencyMetric`
+- `PlanAdherenceMetric`
+- `PlanQualityMetric`
+
+**Exit Criteria:**
+"I'm a new hire — what do I need to know about leave and benefits?" routes to Onboarding + Leave agents and returns a combined response.
 
 ---
 
 ### Phase 7 — DeepEval Full Suite + CI/CD
-**Goal:** Systematic evaluation of every component. Automated on every code push.
-**Components:** Complete golden datasets (100 Q&A pairs), GitHub Actions CI, Confident AI dashboard, custom HR accuracy G-Eval metric, Streamlit eval dashboard page.
-**All metrics running:**
-- Chat: `GEval`, `AnswerRelevancyMetric`, `HallucinationMetric`
-- Document RAG: `FaithfulnessMetric`, `ContextualPrecisionMetric`, `ContextualRecallMetric`
-- Database RAG: `FaithfulnessMetric`, `HallucinationMetric`, `ContextualRelevancyMetric`
-- Single Agent: `TaskCompletionMetric`, `ToolCorrectnessMetric`, `GoalAccuracyMetric`
-- MCP: `MCPTaskCompletionMetric`, `MCPUseMetric`, `MultiTurnMCPUseMetric`
-- Multi-Agent: `StepEfficiencyMetric`, `PlanAdherenceMetric`, `PlanQualityMetric`
-**Exit criteria:** Full eval suite runs in CI on push to main. Results visible in Confident AI dashboard.
+
+**Goal:**
+Systematic evaluation of every component. Automated on every code push.
+
+**Components:**
+- Complete golden datasets (100 Q&A pairs)
+- GitHub Actions CI pipeline
+- Confident AI dashboard integration
+- Custom HR accuracy G-Eval metric
+- Streamlit eval dashboard page
+
+**All Metrics Running:**
+
+| Component | Metrics |
+|---|---|
+| Chat | `GEval`, `AnswerRelevancyMetric`, `HallucinationMetric` |
+| Document RAG | `FaithfulnessMetric`, `ContextualPrecisionMetric`, `ContextualRecallMetric` |
+| Database RAG | `FaithfulnessMetric`, `HallucinationMetric`, `ContextualRelevancyMetric` |
+| Single Agent | `TaskCompletionMetric`, `ToolCorrectnessMetric`, `GoalAccuracyMetric` |
+| MCP | `MCPTaskCompletionMetric`, `MCPUseMetric`, `MultiTurnMCPUseMetric` |
+| Multi-Agent | `StepEfficiencyMetric`, `PlanAdherenceMetric`, `PlanQualityMetric` |
+
+**Exit Criteria:**
+Full eval suite runs in CI on push to main. Results visible in Confident AI dashboard.
+
 
 ---
 
 ### Phase 8 — Polish + Documentation
-**Goal:** Production-ready, portfolio-presentable project.
-**Components:** Architecture diagram, one-command Docker startup, Streamlit agent trace viewer, sample data, recorded demo.
-**Exit criteria:** `docker compose up` starts the entire stack. README enables a new developer to run it in under 10 minutes.
+
+**Goal:**
+Production-ready, portfolio-presentable project.
+
+**Components:**
+- Architecture diagram
+- One-command Docker startup
+- Streamlit agent trace viewer
+- Sample data
+- Recorded demo
+
+**Exit Criteria:**
+`docker compose up` starts the entire stack. README enables a new developer to run it in under 10 minutes.
 
 ---
 
