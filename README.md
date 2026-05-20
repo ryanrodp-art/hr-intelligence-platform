@@ -23,21 +23,24 @@ An internal HR assistant where:
 
 ## Architecture
 
+```
 User (Streamlit UI)
-│  POST /chat
-▼
+      │  POST /chat
+      ▼
 FastAPI Backend
-│
-▼
+      │
+      ▼
 LangGraph Orchestrator ──── Agent State (shared)
-│
-├──► Policy Agent       ──► Document RAG    ──► ChromaDB (policy PDFs)
-├──► Leave Agent        ──► Database RAG    ──► PostgreSQL (employee records)
-│                                └──► MCP Server (leave tool, org chart)
-├──► Onboarding Agent   ──► Hybrid Retriever ──► Both RAGs
-├──► Payroll Agent      ──► Vector Search   ──► ChromaDB (benefits docs)
-└──► Single HR Advisor  ──► Fallback agent for simple queries
+      │
+      ├──► Policy Agent       ──► Document RAG    ──► ChromaDB (policy PDFs)
+      ├──► Leave Agent        ──► Database RAG    ──► PostgreSQL (employee records)
+      │                                └──► MCP Server (leave tool, org chart)
+      ├──► Onboarding Agent   ──► Hybrid Retriever ──► Both RAGs
+      ├──► Payroll Agent      ──► Vector Search   ──► ChromaDB (benefits docs)
+      └──► Single HR Advisor  ──► Fallback agent for simple queries
+
 All paths ──► DeepEval evaluation hooks (tracing + metrics)
+```
 
 ---
 
@@ -63,6 +66,7 @@ All paths ──► DeepEval evaluation hooks (tracing + metrics)
 
 ## Project Structure
 
+```
 hr-genai-agent-platform/
 │
 ├── README.md
@@ -181,6 +185,7 @@ hr-genai-agent-platform/
 ├── seed_database.py               # Seed PostgreSQL with employee data
 ├── run_evals.py                   # Run full DeepEval evaluation suite
 └── start_mcp_server.py            # Start the MCP server standalone
+```
 
 ---
 
