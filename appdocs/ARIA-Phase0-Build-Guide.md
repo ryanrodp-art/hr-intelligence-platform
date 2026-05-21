@@ -1162,6 +1162,28 @@ pytest evaluation/tests/
 
 > Run these checks in sequence. All must pass before starting Phase 1.
 
+### Start the Full Stack
+
+Open three terminal tabs and run one command per tab:
+
+```bash
+# Tab 1 — Docker (databases)
+docker compose up -d
+
+# Tab 2 — FastAPI backend
+uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Tab 3 — Streamlit frontend
+uv run streamlit run frontend/app.py --server.port 8501
+```
+
+Once all three are running, open the UI in your browser:
+```bash
+open http://localhost:8501
+```
+
+### Verification Commands
+
 ```bash
 # 1. Docker infrastructure
 docker compose ps
