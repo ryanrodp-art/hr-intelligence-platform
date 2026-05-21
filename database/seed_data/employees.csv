@@ -1,0 +1,51 @@
+employee_id,first_name,last_name,email,department,role,manager_id,location,hire_date,leave_balance,status
+EMP-0001,James,Chen,james.chen@hrplatform.com,Engineering,VP of Engineering,,Seattle,2018-03-15,30,Active
+EMP-0002,Priya,Sharma,priya.sharma@hrplatform.com,Engineering,Director of Engineering,EMP-0001,Seattle,2019-06-01,27,Active
+EMP-0003,Marcus,Johnson,marcus.johnson@hrplatform.com,Engineering,Director of Engineering,EMP-0001,New York,2018-11-12,26,Active
+EMP-0004,Yuki,Tanaka,yuki.tanaka@hrplatform.com,Engineering,Senior Engineering Manager,EMP-0002,Seattle,2020-02-17,23,Active
+EMP-0005,Aisha,Patel,aisha.patel@hrplatform.com,Engineering,Senior Engineering Manager,EMP-0002,Singapore,2020-07-06,22,Active
+EMP-0006,David,Kowalski,david.kowalski@hrplatform.com,Engineering,Senior Engineering Manager,EMP-0003,New York,2019-09-23,24,Active
+EMP-0007,Sofia,Rodriguez,sofia.rodriguez@hrplatform.com,Engineering,Senior Software Engineer,EMP-0004,Seattle,2021-04-05,18,Active
+EMP-0008,Kevin,Liu,kevin.liu@hrplatform.com,Engineering,Software Engineer,EMP-0004,Seattle,2022-08-22,12,Active
+EMP-0009,Emma,Thompson,emma.thompson@hrplatform.com,Engineering,Software Engineer,EMP-0004,London,2021-11-30,10,Inactive
+EMP-0010,Raj,Gupta,raj.gupta@hrplatform.com,Engineering,Senior Software Engineer,EMP-0005,Singapore,2021-03-15,17,Active
+EMP-0011,Mei,Lin,mei.lin@hrplatform.com,Engineering,Data Engineer,EMP-0005,Singapore,2022-01-10,14,Active
+EMP-0012,Tyler,Brooks,tyler.brooks@hrplatform.com,Engineering,Software Engineer,EMP-0006,New York,2023-05-08,11,Active
+EMP-0013,Anika,Osei,anika.osei@hrplatform.com,Engineering,DevOps Engineer,EMP-0006,London,2022-10-17,13,Active
+EMP-0014,Carlos,Mendez,carlos.mendez@hrplatform.com,Engineering,Software Engineer,EMP-0006,New York,2023-09-04,9,Active
+EMP-0015,Hiroshi,Nakamura,hiroshi.nakamura@hrplatform.com,Engineering,Data Engineer,EMP-0003,Sydney,2022-04-25,15,Active
+EMP-0016,Sarah,Mitchell,sarah.mitchell@hrplatform.com,HR,VP of People,,Seattle,2018-07-09,29,Active
+EMP-0017,Fatima,Al-Hassan,fatima.al-hassan@hrplatform.com,HR,HR Director,EMP-0016,New York,2019-02-14,25,Active
+EMP-0018,Liam,O'Brien,liam.obrien@hrplatform.com,HR,HR Manager,EMP-0017,Seattle,2020-05-18,21,Active
+EMP-0019,Neha,Kapoor,neha.kapoor@hrplatform.com,HR,HR Manager,EMP-0017,Singapore,2020-11-02,20,Active
+EMP-0020,Grace,Kim,grace.kim@hrplatform.com,HR,HR Business Partner,EMP-0018,Seattle,2021-08-30,16,Active
+EMP-0021,Samuel,Okafor,samuel.okafor@hrplatform.com,HR,Talent Acquisition Specialist,EMP-0018,London,2022-03-14,13,Active
+EMP-0022,Isabella,Fernandez,isabella.fernandez@hrplatform.com,HR,HR Coordinator,EMP-0019,Singapore,2023-06-19,8,On Leave
+EMP-0023,Alex,Park,alex.park@hrplatform.com,HR,HR Business Partner,EMP-0019,New York,2021-12-07,15,Active
+EMP-0024,Michael,Torres,michael.torres@hrplatform.com,Sales,VP of Sales,,New York,2018-05-21,30,Active
+EMP-0025,Diana,Walsh,diana.walsh@hrplatform.com,Sales,Sales Director,EMP-0024,New York,2019-08-12,26,Active
+EMP-0026,Benjamin,Okonkwo,benjamin.okonkwo@hrplatform.com,Sales,Regional Sales Manager,EMP-0025,London,2020-03-09,22,Active
+EMP-0027,Chloe,Zhang,chloe.zhang@hrplatform.com,Sales,Regional Sales Manager,EMP-0025,Singapore,2020-09-28,21,Active
+EMP-0028,Ryan,Murphy,ryan.murphy@hrplatform.com,Sales,Regional Sales Manager,EMP-0025,New York,2021-01-19,20,Active
+EMP-0029,Ananya,Singh,ananya.singh@hrplatform.com,Sales,Senior Account Executive,EMP-0026,London,2021-07-26,17,Active
+EMP-0030,Lucas,Dubois,lucas.dubois@hrplatform.com,Sales,Account Executive,EMP-0026,London,2022-11-07,11,Inactive
+EMP-0031,Mia,Nakashima,mia.nakashima@hrplatform.com,Sales,Senior Account Executive,EMP-0027,Singapore,2021-05-03,16,Active
+EMP-0032,Daniel,Reeves,daniel.reeves@hrplatform.com,Sales,Sales Development Rep,EMP-0028,New York,2023-02-13,9,Active
+EMP-0033,Zara,Ahmed,zara.ahmed@hrplatform.com,Sales,Account Executive,EMP-0028,New York,2023-10-16,8,Active
+EMP-0034,Olivia,Hartmann,olivia.hartmann@hrplatform.com,Marketing,VP of Marketing,,Seattle,2018-09-03,28,Active
+EMP-0035,Noah,Yamamoto,noah.yamamoto@hrplatform.com,Marketing,Marketing Director,EMP-0034,Seattle,2019-11-18,24,Active
+EMP-0036,Simone,Leclerc,simone.leclerc@hrplatform.com,Marketing,Marketing Manager,EMP-0035,London,2021-02-22,20,Active
+EMP-0037,Arjun,Bhatia,arjun.bhatia@hrplatform.com,Marketing,Marketing Manager,EMP-0035,Singapore,2020-06-15,22,Active
+EMP-0038,Hannah,Schulz,hannah.schulz@hrplatform.com,Marketing,Senior Marketing Specialist,EMP-0036,London,2022-07-11,16,Active
+EMP-0039,Omar,Abdullah,omar.abdullah@hrplatform.com,Marketing,Marketing Analyst,EMP-0036,London,2023-04-03,10,Active
+EMP-0040,Tiffany,Wong,tiffany.wong@hrplatform.com,Marketing,Senior Marketing Specialist,EMP-0037,Singapore,2022-02-28,15,Active
+EMP-0041,Pedro,Alvarez,pedro.alvarez@hrplatform.com,Marketing,Marketing Analyst,EMP-0037,New York,2024-01-08,7,Active
+EMP-0042,Victoria,Chen,victoria.chen@hrplatform.com,Finance,VP of Finance,,Seattle,2018-04-16,30,Active
+EMP-0043,Jonathan,Mbeki,jonathan.mbeki@hrplatform.com,Finance,Finance Director,EMP-0042,New York,2019-10-07,25,Active
+EMP-0044,Sunita,Rao,sunita.rao@hrplatform.com,Finance,Finance Manager,EMP-0043,Seattle,2020-08-24,21,Active
+EMP-0045,Patrick,Flynn,patrick.flynn@hrplatform.com,Finance,Finance Manager,EMP-0043,New York,2021-03-29,20,Active
+EMP-0046,Amara,Diallo,amara.diallo@hrplatform.com,Finance,Senior Financial Analyst,EMP-0044,Seattle,2021-10-11,17,Active
+EMP-0047,Wei,Zhang,wei.zhang@hrplatform.com,Finance,Financial Analyst,EMP-0044,Seattle,2022-06-06,12,Active
+EMP-0048,Natalia,Kozlov,natalia.kozlov@hrplatform.com,Finance,Accountant,EMP-0045,New York,2023-01-23,10,Active
+EMP-0049,Ethan,Blackwood,ethan.blackwood@hrplatform.com,Finance,Senior Financial Analyst,EMP-0045,New York,2021-09-14,18,Active
+EMP-0050,Laila,Haddad,laila.haddad@hrplatform.com,Finance,Financial Analyst,EMP-0043,Sydney,2022-12-05,13,Active
