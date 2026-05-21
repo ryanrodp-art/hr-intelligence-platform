@@ -1030,6 +1030,134 @@ User types message and hits Enter
 
 ---
 
+## Step 13 — evaluation/ Structure
+
+### Concept
+
+DeepEval is an open-source LLM evaluation framework. It runs automated tests against your AI agent's responses using a judge LLM (GPT-4o) to score metrics like answer relevancy, faithfulness, hallucination, and custom HR accuracy.
+
+Phase 0 creates the folder scaffold and placeholder files. The actual test cases and metric implementations are written in Phase 7 once all agents are built and producing real responses to evaluate.
+
+**Three components created:**
+
+- **Golden sets** — curated input/expected-output pairs used to benchmark the agents. One per subsystem: RAG, agent reasoning, MCP tools
+- **Custom metrics** — HR-specific evaluation criteria extending DeepEval's G-Eval. A response may score well on generic relevancy but still give wrong HR policy guidance
+- **`conftest.py`** — pytest configuration file auto-loaded before every test run. Configures the judge LLM used to score all metrics in the session
+
+### Claude Code Prompt
+
+```
+Set up the DeepEval evaluation folder structure.
+
+1. Create these files with [] as their entire content:
+   - evaluation/datasets/rag_golden_set.json
+   - evaluation/datasets/agent_golden_set.json
+   - evaluation/datasets/mcp_golden_set.json
+
+2. Create evaluation/metrics/custom_hr_metric.py with:
+
+   A module-level docstring:
+   "Custom DeepEval metrics for the ARIA HR Intelligence Platform.
+   These metrics extend G-Eval with HR-specific evaluation criteria.
+   Implemented in Phase 7 — placeholder created in Phase 0."
+
+   A placeholder class CustomHRAccuracyMetric with:
+   - Class docstring: "Custom G-Eval metric that evaluates whether
+     ARIA's response provides accurate HR guidance that complies
+     with company policy. Implemented in Phase 7."
+   - A single pass statement as the body
+
+3. Create evaluation/tests/conftest.py with:
+
+   A module-level docstring:
+   "DeepEval pytest configuration for ARIA HR Intelligence Platform.
+   This conftest.py is automatically loaded by pytest before any test runs.
+   It configures the judge LLM used to evaluate all DeepEval metrics."
+
+   Imports: import os, import pytest
+
+   Comment block explaining:
+   - DeepEval uses a judge LLM to evaluate your LLM's outputs
+   - We use GPT-4o as the judge
+   - The OPENAI_API_KEY is read from the environment automatically
+   - Confident AI integration will be added in Phase 7
+
+   A pytest fixture called deepeval_config:
+   - scope="session"
+   - Reads OPENAI_API_KEY from os.environ
+   - Prints "DeepEval judge LLM: GPT-4o" to confirm setup
+   - Returns {"judge_model": "gpt-4o"}
+
+4. After creating, verify with:
+   uv run python -c "import deepeval; print('DeepEval version:', deepeval.__version__)"
+   And show the evaluation folder tree with: find evaluation/ -type f | sort
+```
+
+### Validation Commands
+
+```bash
+# Verify DeepEval is installed and importable
+uv run python -c "import deepeval; print('DeepEval version:', deepeval.__version__)"
+
+# Show full evaluation folder structure
+find evaluation/ -type f | sort
+
+# Verify golden sets are valid empty JSON arrays
+uv run python -c "
+import json
+for f in ['rag_golden_set', 'agent_golden_set', 'mcp_golden_set']:
+    data = json.load(open(f'evaluation/datasets/{f}.json'))
+    print(f'{f}.json:', data)
+"
+
+# Verify custom metric class is importable
+uv run python -c "
+from evaluation.metrics.custom_hr_metric import CustomHRAccuracyMetric
+print('CustomHRAccuracyMetric:', CustomHRAccuracyMetric)
+"
+
+# Verify conftest is syntactically correct
+uv run python -c "
+import ast, pathlib
+src = pathlib.Path('evaluation/tests/conftest.py').read_text()
+ast.parse(src)
+print('conftest.py: syntax OK')
+"
+```
+
+### Understanding the Evaluation Scaffold
+
+**Golden sets** are the ground-truth benchmark datasets. Each entry will contain:
+```json
+{
+  "input": "What is my leave balance?",
+  "expected_output": "You have 18 days of annual leave remaining.",
+  "context": ["Employee EMP-0007 has leave_balance=18, status=Active"]
+}
+```
+
+**`conftest.py`** is a pytest convention — any file named `conftest.py` is automatically imported before tests run. No explicit import needed in test files:
+```
+pytest evaluation/tests/
+    ↓ pytest finds conftest.py automatically
+    ↓ deepeval_config fixture configured for the session
+    ↓ all test files inherit the judge LLM setting
+```
+
+**Why a custom metric?** DeepEval's built-in `AnswerRelevancyMetric` scores generic relevance. HR responses need an additional check: is the policy guidance actually correct? A response can be relevant but still cite the wrong leave entitlement. `CustomHRAccuracyMetric` adds that domain-specific layer in Phase 7.
+
+### Exit Criteria
+
+| Check | Status |
+|---|---|
+| `DeepEval version: 4.x.x` printed | ✅ |
+| 3 golden set JSON files created with `[]` | ✅ |
+| `custom_hr_metric.py` with `CustomHRAccuracyMetric` class | ✅ |
+| `conftest.py` with `deepeval_config` session fixture | ✅ |
+| All files importable without errors | ✅ |
+
+---
+
 ## Phase 0 — Full Stack Verification
 
 > Run these checks in sequence. All must pass before starting Phase 1.
