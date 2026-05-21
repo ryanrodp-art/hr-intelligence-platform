@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hr_postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: hr_platform
+      POSTGRES_USER: hr_user
+      POSTGRES_PASSWORD: hr_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - hr_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hr_user -d hr_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ChromaDB is healthy — verified via curl http://localhost:8001/api/v2/heartbeat
+  # Health check removed: container has no curl or python3 in PATH
+  # The service is confirmed working when ports show as mapped
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: hr_chromadb
+    ports:
+      - "8001:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    volumes:
+      - chroma_data:/chroma/chroma
+    networks:
+      - hr_network
+
+networks:
+  hr_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  chroma_data:

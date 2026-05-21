@@ -1,0 +1,51 @@
+employee_id,manager_id,level,team,department
+EMP-0001,,2,Platform Team,Engineering
+EMP-0002,EMP-0001,3,Backend Team,Engineering
+EMP-0003,EMP-0001,3,Platform Team,Engineering
+EMP-0004,EMP-0002,4,Backend Team,Engineering
+EMP-0005,EMP-0002,4,Data Team,Engineering
+EMP-0006,EMP-0003,4,Frontend Team,Engineering
+EMP-0007,EMP-0004,5,Backend Team,Engineering
+EMP-0008,EMP-0004,5,Backend Team,Engineering
+EMP-0009,EMP-0004,5,Backend Team,Engineering
+EMP-0010,EMP-0005,5,Data Team,Engineering
+EMP-0011,EMP-0005,5,Data Team,Engineering
+EMP-0012,EMP-0006,5,Frontend Team,Engineering
+EMP-0013,EMP-0006,5,DevOps Team,Engineering
+EMP-0014,EMP-0006,5,Frontend Team,Engineering
+EMP-0015,EMP-0003,5,Data Team,Engineering
+EMP-0016,,2,People Operations,HR
+EMP-0017,EMP-0016,3,People Operations,HR
+EMP-0018,EMP-0017,4,People Operations,HR
+EMP-0019,EMP-0017,4,HR Business Partners,HR
+EMP-0020,EMP-0018,5,People Operations,HR
+EMP-0021,EMP-0018,5,Talent Acquisition,HR
+EMP-0022,EMP-0019,5,HR Business Partners,HR
+EMP-0023,EMP-0019,5,HR Business Partners,HR
+EMP-0024,,2,Enterprise Sales,Sales
+EMP-0025,EMP-0024,3,Enterprise Sales,Sales
+EMP-0026,EMP-0025,4,SMB Sales,Sales
+EMP-0027,EMP-0025,4,Enterprise Sales,Sales
+EMP-0028,EMP-0025,4,Sales Development,Sales
+EMP-0029,EMP-0026,5,SMB Sales,Sales
+EMP-0030,EMP-0026,5,SMB Sales,Sales
+EMP-0031,EMP-0027,5,Enterprise Sales,Sales
+EMP-0032,EMP-0028,5,Sales Development,Sales
+EMP-0033,EMP-0028,5,Sales Development,Sales
+EMP-0034,,2,Brand & Content,Marketing
+EMP-0035,EMP-0034,3,Brand & Content,Marketing
+EMP-0036,EMP-0035,4,Brand & Content,Marketing
+EMP-0037,EMP-0035,4,Digital Marketing,Marketing
+EMP-0038,EMP-0036,5,Brand & Content,Marketing
+EMP-0039,EMP-0036,5,Brand & Content,Marketing
+EMP-0040,EMP-0037,5,Digital Marketing,Marketing
+EMP-0041,EMP-0037,5,Product Marketing,Marketing
+EMP-0042,,2,FP&A,Finance
+EMP-0043,EMP-0042,3,Financial Operations,Finance
+EMP-0044,EMP-0043,4,FP&A,Finance
+EMP-0045,EMP-0043,4,Accounting,Finance
+EMP-0046,EMP-0044,5,FP&A,Finance
+EMP-0047,EMP-0044,5,FP&A,Finance
+EMP-0048,EMP-0045,5,Accounting,Finance
+EMP-0049,EMP-0045,5,Accounting,Finance
+EMP-0050,EMP-0043,5,Financial Operations,Finance
