@@ -4,8 +4,8 @@ from contextlib import asynccontextmanager
 import logging
 import uvicorn
 
-from backend.schemas.chat import ChatRequest, ChatResponse
 from config.settings import settings
+from backend.api.routes import chat as chat_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -69,25 +69,7 @@ def health():
     }
 
 
-@app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    """Handle a chat message from the Streamlit frontend.
-
-    Phase 0 stub: returns a static greeting so the frontend and schema can be
-    validated end-to-end before the LangGraph agent is wired in Phase 1.
-    The session_id is echoed back so the client can correlate requests across
-    a conversation thread.
-    """
-    logger.info(f"Chat request from session {request.session_id}: {request.message[:50]}...")
-    return ChatResponse(
-        response=(
-            "Hello! I am ARIA, your HR Intelligence Assistant. "
-            "I can help you with HR policies, leave requests, employee information, "
-            "and more. AI features are coming in Phase 1!"
-        ),
-        session_id=request.session_id,
-        model="stub-phase-0",
-    )
+app.include_router(chat_router.router)
 
 
 if __name__ == "__main__":
