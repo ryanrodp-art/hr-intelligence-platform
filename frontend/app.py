@@ -1,6 +1,7 @@
 import streamlit as st
 import httpx
 import uuid
+import json
 from datetime import datetime
 
 BACKEND_URL = "http://localhost:8000"
@@ -64,6 +65,23 @@ if not st.session_state.messages:
         )
         st.write("What can I help you with today?")
 
+# ── Streaming helper ───────────────────────────────────────────────────────
+def stream_response(prompt: str, session_id: str):
+    """Generator that streams tokens from the FastAPI streaming endpoint."""
+    with httpx.stream(
+        "POST",
+        f"{BACKEND_URL}/chat/stream",
+        json={"message": prompt, "session_id": session_id},
+        timeout=60,
+    ) as response:
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                data = json.loads(line[6:])
+                token = data.get("token", "")
+                if token and token != "[DONE]" and token != "[ERROR]":
+                    yield token
+
+
 # ── Chat input ─────────────────────────────────────────────────────────────
 prompt = st.chat_input("Ask ARIA anything about HR...")
 
@@ -75,18 +93,13 @@ if prompt:
 
     with st.chat_message("assistant"):
         try:
-            with st.spinner("ARIA is thinking..."):
-                response = httpx.post(
-                    f"{BACKEND_URL}/chat",
-                    json={"message": prompt, "session_id": st.session_state.session_id},
-                    timeout=30,
-                )
-                response.raise_for_status()
-
-            response_text = response.json()["response"]
-            st.write(response_text)
-            st.session_state.messages.append({"role": "assistant", "content": response_text})
-
+            response_text = st.write_stream(
+                stream_response(prompt, st.session_state.session_id)
+            )
         except Exception as e:
             st.error(f"❌ Could not reach ARIA backend: {str(e)}")
             st.info("Make sure the backend is running on port 8000")
+            response_text = None
+
+    if response_text:
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
