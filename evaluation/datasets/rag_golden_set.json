@@ -1,1 +1,77 @@
-[]
+[
+  {
+    "input": "How many days of annual leave do full-time employees receive?",
+    "expected_output": "Full-time employees at Acme Corp receive 25 days of annual leave per calendar year, accruing at 2.08 days per month from hire date.",
+    "document": "leave_policy.pdf"
+  },
+  {
+    "input": "What is the parental leave entitlement for a primary caregiver?",
+    "expected_output": "Primary caregivers receive 16 weeks of fully paid parental leave. Employees must have 6 months of continuous service and give 8 weeks written notice to HR.",
+    "document": "leave_policy.pdf"
+  },
+  {
+    "input": "How many sick days do employees get per year?",
+    "expected_output": "Employees receive 10 days of sick leave per calendar year. Sick leave does not accrue or carry over. A doctor's certificate is required for absences exceeding 3 consecutive days.",
+    "document": "leave_policy.pdf"
+  },
+  {
+    "input": "What is the maximum annual leave carryover?",
+    "expected_output": "Employees can carry over a maximum of 5 days of annual leave to the following calendar year. Leave in excess of the carryover limit is forfeited at year end.",
+    "document": "leave_policy.pdf"
+  },
+  {
+    "input": "How do I submit a leave request at Acme Corp?",
+    "expected_output": "Submit your leave request via the HR portal at least 2 weeks in advance. Your manager must approve or decline within 5 business days. HR sends a confirmation email within 2 business days of manager approval.",
+    "document": "leave_policy.pdf"
+  },
+  {
+    "input": "What are the steps to report a harassment complaint?",
+    "expected_output": "Step 1: Raise the concern with your direct manager informally. Step 2: If unresolved within 5 business days, escalate to your HR Business Partner. Step 3: Submit a formal grievance form to the HR Director. Step 4: An independent investigation will be completed within 15 business days. All reports are confidential and there is a no retaliation policy.",
+    "document": "code_of_conduct.pdf"
+  },
+  {
+    "input": "What are the stages of the disciplinary procedure?",
+    "expected_output": "Stage 1: Verbal warning recorded in the employee file. Stage 2: Written warning valid for 12 months. Stage 3: Final written warning valid for 12 months. Stage 4: Dismissal with right of appeal within 10 days.",
+    "document": "code_of_conduct.pdf"
+  },
+  {
+    "input": "Does the company pay for health insurance?",
+    "expected_output": "Yes. Employee health insurance coverage is 100% company-paid. Dependant coverage is 80% company-paid with a 20% employee contribution. Dental and vision care are included. Coverage is effective from the first day of employment.",
+    "document": "benefits_guide.pdf"
+  },
+  {
+    "input": "What is the company match for the 401k retirement plan?",
+    "expected_output": "The company matches 100% of the first 3% of base salary contributed and 50% of the next 3% contributed. The company match vests over 3 years. Employees are eligible to enrol after 90 days of employment.",
+    "document": "benefits_guide.pdf"
+  },
+  {
+    "input": "What is the annual professional development budget?",
+    "expected_output": "Each employee receives an annual learning and development budget of $2,000. This can be used for courses, conferences, and certifications. Manager approval is required before booking.",
+    "document": "benefits_guide.pdf"
+  },
+  {
+    "input": "How long is the probation period at Acme Corp?",
+    "expected_output": "The probation period is 90 days for all new employees. There is an informal 60-day check-in with your line manager and a formal 90-day assessment. The probation period can be extended by up to 30 days with HR Director approval.",
+    "document": "employee_handbook.pdf"
+  },
+  {
+    "input": "What is the remote work policy at Acme Corp?",
+    "expected_output": "Acme Corp operates a hybrid model requiring a minimum of 3 days in the office per week. Employees may work remotely for a maximum of 2 days per week. New employees receive a $500 home office equipment allowance. Employees must be available during core hours when working remotely.",
+    "document": "employee_handbook.pdf"
+  },
+  {
+    "input": "What are the standard working hours at Acme Corp?",
+    "expected_output": "Standard working hours are 9am to 5pm Monday to Friday, totalling 37.5 hours per week. Core hours are 10am to 3pm when all employees are expected to be available. Overtime must be pre-approved by a manager and is compensated at 1.5x the hourly rate.",
+    "document": "employee_handbook.pdf"
+  },
+  {
+    "input": "What is the notice period for termination?",
+    "expected_output": "The standard notice period is 4 weeks, or as specified in the employment contract. The company may pay in lieu of notice. The final paycheck is issued within 5 business days of the last working day. An exit interview with HR is conducted within the final week.",
+    "document": "employee_handbook.pdf"
+  },
+  {
+    "input": "What wellness benefits does Acme Corp offer?",
+    "expected_output": "Acme Corp offers a gym membership subsidy of $50 per month, 6 free mental health sessions per year via the Employee Assistance Program, and an annual wellness allowance of $500 for eligible expenses such as fitness equipment and nutrition.",
+    "document": "benefits_guide.pdf"
+  }
+]
