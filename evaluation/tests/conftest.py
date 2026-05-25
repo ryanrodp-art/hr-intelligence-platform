@@ -2,7 +2,12 @@
 This conftest.py is automatically loaded by pytest before any test runs.
 It configures the judge LLM used to evaluate all DeepEval metrics."""
 
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)
+))))
+
 import pytest
 
 # DeepEval uses a judge LLM to evaluate your LLM's outputs.
