@@ -207,6 +207,133 @@ This file manages three things: the LLM configuration, the conversation memory s
 
 ---
 
+## Journey 1 — DeepEval Evaluation
+
+The evaluation journey for chat is a separate path that runs alongside — not inside — the live request flow. Think of it as a second user who sends the same questions as a real employee, but instead of reading ARIA's answers, hands them to a judge who scores them.
+
+### The Evaluation Flow
+
+```
+evaluation/datasets/chat_golden_set.json    the answer key — 20 questions + expected answers
+        ↓ loaded once by the golden_set fixture
+evaluation/tests/test_chat.py               pytest collects 5 test functions
+        ↓ each test function calls get_aria_response()
+backend/api/routes/chat.py                  POST /chat/ — same endpoint Streamlit uses
+        ↓ ARIA answers via GPT-4o and memory
+evaluation/tests/test_chat.py               actual response collected
+        ↓ LLMTestCase built: input + actual_output + expected_output
+DeepEval evaluate()                         sends to judge LLM
+        ↓ GPT-4o reads question + answer + evaluation criteria
+        ↓ returns score (0.0–1.0) + plain English reasoning
+pytest                                      asserts all scores above threshold
+        ↓ prints results table with pass/fail per test case
+```
+
+---
+
+### File: `evaluation/datasets/chat_golden_set.json`
+
+**What it is:** The answer key — 20 manually written question and expected answer pairs.
+
+**Where it fits:** Loaded once at test startup and shared across all five test functions. Nothing generates this automatically — it is deliberately hand-authored because it encodes what *you* consider a correct answer.
+
+**How it works:**
+The first 10 entries cover standard HR knowledge — leave types, onboarding, performance reviews, org charts. The next 10 entries are deliberate edge cases: vague questions, company-specific data ARIA doesn't have, emotionally sensitive scenarios, legally sensitive termination questions, and one intentional off-topic question (asking ARIA to write a Python script). These edge cases are kept as intentional failures rather than removed — they make the evaluation suite honest. A test suite that only asks easy questions is not a quality gate.
+
+The expected outputs are specific and citable: "25 days per calendar year" not "employees receive annual leave." Specificity matters because the judge does semantic comparison — it needs enough substance in the expected output to evaluate whether ARIA's answer is meaningfully correct.
+
+---
+
+### File: `evaluation/tests/conftest.py`
+
+**What it is:** The pytest configuration file that runs automatically before any test.
+
+**Where it fits:** Loaded by pytest before `test_chat.py` is collected. Sets up the environment that all tests depend on.
+
+**How it works:**
+A session-scoped fixture called `deepeval_config` reads `OPENAI_API_KEY` from the environment and prints a confirmation that the judge LLM is configured. DeepEval reads the API key automatically — `conftest.py` just makes the dependency visible and verifiable before tests begin. If the key is missing, tests fail immediately with a clear error rather than a cryptic API rejection mid-run.
+
+---
+
+### File: `evaluation/tests/test_chat.py`
+
+**What it is:** Five test functions that collectively prove the chat journey works correctly across different question types and failure modes.
+
+**Where it fits:** The endpoint of the evaluation flow. Each function builds test cases, calls `evaluate()`, and asserts all cases pass.
+
+**How it works:**
+
+**`get_aria_response(question)`** — the helper function used by every test. Posts to `POST /chat/` with a `session_id` derived deterministically from the question using `hash(question) % 100000`. The same question always generates the same session ID, so memory context is consistent across runs. Returns just the response text — not the full `ChatResponse` object.
+
+**The `golden_set` fixture** — a module-scoped pytest fixture that reads `chat_golden_set.json` once at startup and returns the parsed list. Module scope means the file is read once no matter how many test functions use it. Without this, each test function would re-read the file from disk.
+
+**The `metrics` fixture** — creates the three metric objects once and stores them in a dict. All five test functions share the same metric instances. The fixture is module-scoped for the same reason as `golden_set` — create once, reuse everywhere.
+
+---
+
+### The Three Metrics
+
+**`GEval` — HR Role Adherence**
+
+This is the most flexible metric in DeepEval. You write the evaluation criteria in plain English and GPT-4o grades against it. The criteria have four points: maintain the ARIA persona, only discuss HR topics, redirect off-topic questions, and be professional. The judge reads both ARIA's response and the original question — the `evaluation_params` setting tells it which fields to look at. Without the question, the judge couldn't check whether ARIA appropriately redirected an off-topic request. Judge model is `gpt-5.4` — DeepEval automatically selects the latest available model for GEval.
+
+**`AnswerRelevancyMetric`**
+
+Measures whether the response directly addresses what was asked. It works differently from GEval — instead of reading a rubric, it generates hypothetical questions that ARIA's response would answer well, then measures how many of those match the original question. If ARIA's response about payroll contacts would also answer "who handles HR admin?" then the relevancy is high. If it only partially addresses the original question, the score drops. Judge model is `gpt-4o`.
+
+**`HallucinationMetric`**
+
+Measures whether ARIA invents facts not present in the provided context. When `context=[]` (empty list) is passed, the judge treats any specific factual claim as potentially invented — because there are no source documents to support it. A score of `0.0` means zero hallucination detected. This is the best possible result and what all five hallucination test cases achieved. Judge model is `gpt-4o`.
+
+---
+
+### The Five Test Functions
+
+**`test_aria_responds_to_hr_questions`** uses golden set rows 1–8 — the standard HR knowledge questions. Both `role_adherence` and `answer_relevancy` are run against each. This is the core happy-path test: ARIA asked straightforward HR questions and expected to give relevant, on-persona answers.
+
+**`test_aria_rejects_non_hr_questions`** uses golden set row 9 — "Can you help me write a Python script?" Only `role_adherence` is tested here, not answer relevancy. Answer relevancy would be ambiguous — ARIA redirecting to HR topics is the correct response, but that response doesn't directly answer the Python question. Role adherence is the right measure: did ARIA stay in her lane?
+
+**`test_aria_no_hallucination`** uses golden set rows 1–5 with `context=[]`. These are general HR questions where ARIA can answer from training knowledge without inventing company-specific facts. The empty context tells DeepEval to flag any specific claim ARIA makes as a potential hallucination. All five scored `0.00` — ARIA consistently answers in general terms without fabricating specific company data.
+
+**`test_aria_handles_sensitive_questions`** uses golden set rows 13, 15, 17, 19, 20 — unfair treatment by a manager, a three-part sick leave question, ambiguous probation period, harassment complaint, and termination without warning. Both `role_adherence` and `answer_relevancy` are used. A comment in the code notes these may produce lower scores in Phase 1 and are expected to improve when document RAG is added in Phase 2 — acknowledging known limitations honestly rather than papering over them.
+
+**`test_aria_handles_knowledge_boundary_questions`** uses golden set rows 11, 12, 14, 16, 18 with `context=[]` — vague questions, company-specific policy requests, salary ranges, off-topic tech questions, and exact vacation day counts. Only `hallucination` is tested. These are the questions most likely to trigger fabrication — "Exactly how many vacation days do I get?" is high-risk because a number is expected. All five scored `0.00` — ARIA said "I don't have that specific information" rather than inventing figures.
+
+---
+
+### How `evaluate()` and `assert` Work Together
+
+Each test function follows the same pattern. It loops through its golden set entries, calls `get_aria_response()` for each, builds an `LLMTestCase` with the input, actual output, and expected output, then calls `evaluate()` with the list of test cases and the relevant metrics.
+
+`evaluate()` sends every test case to the judge LLM asynchronously — all cases in a function run concurrently. It returns an `EvaluationResult` containing one `TestResult` per case. Each `TestResult` has a `success` boolean that is `True` only if all metrics passed for that case.
+
+The assertion `assert all(r.success for r in results.test_results)` fails the pytest test if any single case fails any single metric. This is intentional — one failure should be visible, not averaged away.
+
+---
+
+### Run Command and Results
+
+```bash
+# FastAPI must be running in Tab 1 before running evals
+uv run deepeval test run evaluation/tests/test_chat.py -v
+```
+
+**Phase 1 baseline — 24 test cases, 100% pass rate, $0.19 cost, ~72 seconds**
+
+| Test Function | Metric | Avg Score | Pass Rate | Cases |
+|---|---|---|---|---|
+| `test_aria_responds_to_hr_questions` | HR Role Adherence | 0.98 | 100% | 8 |
+| `test_aria_responds_to_hr_questions` | Answer Relevancy | 0.98 | 100% | 8 |
+| `test_aria_rejects_non_hr_questions` | HR Role Adherence | 1.00 | 100% | 1 |
+| `test_aria_no_hallucination` | Hallucination | 0.00 | 100% | 5 |
+| `test_aria_handles_sensitive_questions` | HR Role Adherence | 0.93 | 100% | 5 |
+| `test_aria_handles_sensitive_questions` | Answer Relevancy | 1.00 | 100% | 5 |
+| `test_aria_handles_knowledge_boundary_questions` | Hallucination | 0.00 | 100% | 5 |
+
+**One thing worth noting when reading the results:** The payroll contact question (row 5) scored `0.67` Answer Relevancy in one run and `0.80` in another — same question, same ARIA response, different judge score. The judge LLM is itself non-deterministic. This is why scores should be read as trends across multiple runs rather than exact measurements. A score of `0.67` on one run and `0.80` on the next both tell the same story: ARIA's payroll answer is borderline — it answers correctly but vaguely because she has no company-specific contact data. That gap closes in Phase 3 when employee database RAG is added.
+
+---
+
 # JOURNEY 2 — DOCUMENT RAG
 
 ## The RAG Request Flow
@@ -501,6 +628,158 @@ An `APIRouter` with `prefix="/rag"`. Four endpoints:
 25. app.py displays: st.caption("📄 Sources: Leave Policy, Page 1")
 26. app.py displays: st.caption("🔍 Answered from company documents")
 ```
+
+---
+
+## Journey 2 — DeepEval Evaluation
+
+The RAG evaluation journey is structurally identical to the chat evaluation journey — same pytest pattern, same golden set approach, same `evaluate()` and `assert` pattern. What changes is the metric set and one critical addition to every test case: `retrieval_context`.
+
+### The Evaluation Flow
+
+```
+evaluation/datasets/rag_golden_set.json     15 questions + expected answers + source document
+        ↓ loaded once by the rag_golden_set fixture
+evaluation/tests/test_document_rag.py       pytest collects 5 test functions
+        ↓ each test calls get_rag_response() AND get_retrieval_context()
+backend/api/routes/rag.py                   POST /rag/query — same endpoint as non-streaming
+        ↓ ARIA retrieves chunks, answers via GPT-4o
+rag/document_rag/retriever.py               called directly to get the actual chunk texts
+        ↓ both answer AND chunk texts collected
+evaluation/tests/test_document_rag.py       LLMTestCase built with retrieval_context field
+        ↓ sent to DeepEval evaluate()
+DeepEval judge                              reads: question + answer + retrieved chunks
+        ↓ scores faithfulness, precision, recall, relevancy
+pytest                                      asserts all scores above threshold
+        ↓ prints results table with pass/fail per test case
+```
+
+---
+
+### File: `evaluation/datasets/rag_golden_set.json`
+
+**What it is:** The answer key for RAG — 15 questions with specific citable expected answers, one per major policy area.
+
+**Where it fits:** Loaded by the `rag_golden_set` fixture and shared across all five test functions.
+
+**How it works:**
+Each entry has three fields: `input` (the question), `expected_output` (the specific answer), and `document` (which PDF it should come from). The expected outputs use exact figures from the documents — "25 days per calendar year", "16 weeks fully paid", "100% company-paid", "$2,000 per year". This specificity is deliberate — the judge needs enough detail in the expected output to meaningfully evaluate whether ARIA's retrieved answer is correct.
+
+The 15 entries are spread across all four documents: 5 leave policy questions, 2 code of conduct questions, 4 benefits guide questions, and 4 employee handbook questions. This ensures retrieval is tested across the full document set, not just the easiest-to-retrieve content.
+
+---
+
+### File: `evaluation/tests/test_document_rag.py`
+
+**What it is:** Five test functions covering retrieval quality from four different angles plus a routing assertion.
+
+**Where it fits:** Same position as `test_chat.py` in the evaluation flow — the endpoint that exercises the live application and sends results to a judge.
+
+**How it works:**
+
+**`get_rag_response(question)`** — posts to `POST /rag/query` and returns the full response dict including `answer`, `sources`, and `chunks_used`. A `time.sleep(0.5)` at the end spaces out calls to avoid hitting the 30,000 TPM rate limit when DeepEval runs all test cases concurrently.
+
+**`get_retrieval_context(question)`** — calls the retriever directly via `from rag.document_rag.retriever import retrieve` and returns the list of chunk texts that were actually retrieved. This is the raw material that `retrieval_context` needs — the actual text of the chunks ARIA had access to when forming her answer.
+
+**The `sys.path.insert` at the top** — test files live in `evaluation/tests/`, two directories deep from the project root. Without explicitly adding the project root to Python's path, `from rag.document_rag.retriever import retrieve` fails. The three-level `os.path.dirname` walk climbs from `evaluation/tests/test_document_rag.py` up to `evaluation/tests/`, then `evaluation/`, then the project root.
+
+**The critical addition — `retrieval_context`** — is the field that separates RAG evaluation from chat evaluation. Every `LLMTestCase` in the RAG suite includes `retrieval_context=[chunk1_text, chunk2_text, chunk3_text]` — the actual texts of the chunks retrieved for that question. Without this field, DeepEval can only measure answer quality. With it, DeepEval can measure whether the answer faithfully reflects the chunks, whether the chunks were ranked correctly, and whether the chunks contained all the needed information.
+
+**Required environment variables before running:**
+```bash
+export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
+export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
+```
+DeepEval's default timeout is 180 seconds per task. Faithfulness evaluation with `gpt-4o` sometimes takes longer because the judge must read the full retrieval context alongside the answer. These overrides give each task 10 minutes — enough headroom for all but the most extreme cases.
+
+---
+
+### The Four New RAG Metrics
+
+**`FaithfulnessMetric`**
+
+This is the most important metric in the RAG suite. The judge reads ARIA's answer and the retrieved chunks and checks every factual claim: is this claim supported by the context? If ARIA says "employees receive 25 days annual leave" and the retrieved chunk says "25 days per calendar year" — faithful. If ARIA says "30 days" when the chunk says "25" — unfaithful. A score of `1.00` means every single claim traces back to retrieved text. This metric proves ARIA is not hallucinating against her context — stronger than the `HallucinationMetric` in the chat suite because it has actual documents to check against. Threshold is `0.8`.
+
+**`ContextualPrecisionMetric`**
+
+Measures retrieval ranking quality — specifically whether the most relevant chunk is ranked first. The judge reads the question and the ordered list of retrieved chunks and evaluates: given this question, is the first chunk the most useful? The parental leave retrieval bug during Phase 2 was a precision problem. The chunk containing "Primary caregiver: 16 weeks fully paid" was buried behind sick leave content because both were in the same 500-character chunk. After increasing chunk size to 800 characters and adding section separators to the PDFs, the parental leave chunk ranked first — precision reached `1.00`. Threshold is `0.7`.
+
+**`ContextualRecallMetric`**
+
+Measures retrieval completeness — whether the retrieved chunks contain all the information needed to produce the expected answer. The judge reads the expected output and checks whether each sentence in it can be traced to one of the retrieved chunks. For the harassment reporting question, the expected answer lists all four grievance steps. If chunks 1–3 only cover steps 1–2, recall would be low. A score of `1.00` means the context was complete — nothing needed was missing from the retrieved set. Threshold is `0.7`.
+
+**`ContextualRelevancyMetric`**
+
+Measures whether the retrieved chunks are on-topic for the question. Even if chunks are faithful, precise, and complete, they might still include irrelevant content pulled from the wrong section. This metric flags cases where the retriever returned chunks from an unrelated policy area. In Phase 2, two queries had ranking issues — harassment reporting retrieved a Professional Behaviour chunk before the Grievance steps chunk, and professional development retrieved a disability insurance chunk. Both would show lower relevancy scores for those specific queries. Noted as Phase 7 tuning items. Threshold is `0.7`.
+
+**`AnswerRelevancyMetric` (carried from Phase 1)**
+
+This metric travels from Phase 1 into Phase 2 unchanged, serving as a regression check — confirming that grounding answers in documents did not reduce response relevancy. The score actually improved from `0.98` in Phase 1 to `1.00` in Phase 2 because document-grounded answers are more focused and specific than general knowledge answers.
+
+---
+
+### The Five Test Functions
+
+**`test_rag_faithfulness`** covers golden set rows 1–3 — annual leave days, parental leave, and sick days. Three leave policy questions chosen because they have clear, specific facts in the documents. Faithfulness at `1.00` means ARIA's answer for "25 days per calendar year" traces exactly to the retrieved chunk containing that figure — no invention, no paraphrasing that changes meaning.
+
+**`test_rag_contextual_precision`** covers the same three rows. Precision is tested against leave policy questions because they have the clearest expected retrieval order — the annual leave chunk should rank above sick leave for an annual leave question. The judge confirmed: "Relevant node ranked first, irrelevant nodes ranked lower."
+
+**`test_rag_contextual_recall`** covers rows 2 and 6 — parental leave and harassment reporting. These were chosen specifically because their expected answers are multi-part: parental leave has primary caregiver, secondary caregiver, eligibility period, and notice requirement. Harassment reporting has four sequential grievance steps. Recall tests whether all parts made it into the retrieved context, not just the first.
+
+**`test_rag_answer_relevancy`** covers rows 1–3. The judge confirmed for each: "response perfectly addressed the question without any irrelevant information." Score of `1.00` in Phase 2 versus `0.98` in Phase 1 — the regression check passed and improved.
+
+**`test_rag_document_routing`** covers all 15 golden set entries. This function has no LLM judge, no rate limit risk, and no cost — it is a pure Python assertion. For each entry it calls `GET /rag/classify?query=...` and asserts `classification == "rag"`. All 15 policy questions must route to document RAG, not general chat. This test always runs last and finishes in about 10 seconds.
+
+---
+
+### Run Commands
+
+```bash
+# Required env vars — set once per terminal session
+export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
+export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
+
+# Run all five tests as a single hands-free block
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_faithfulness -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_precision -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_recall -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_answer_relevancy -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_document_routing -v
+```
+
+The 60-second gaps prevent hitting the 30,000 TPM rate limit. Each test function makes 3 API calls to ARIA plus 3 judge calls to GPT-4o — 6 calls per function, 5 functions. Running them all concurrently exhausts the token budget before the first function completes.
+
+---
+
+### Phase 2 Baseline Results
+
+**26 test cases, 100% pass rate, $0.07 total cost, ~57 seconds**
+
+| Test Function | Metric | Avg Score | Pass Rate | Cases | Cost |
+|---|---|---|---|---|---|
+| `test_rag_faithfulness` | Faithfulness | 1.00 | 100% | 3 | $0.029 |
+| `test_rag_contextual_precision` | Contextual Precision | 1.00 | 100% | 3 | $0.018 |
+| `test_rag_contextual_recall` | Contextual Recall | 1.00 | 100% | 2 | $0.011 |
+| `test_rag_answer_relevancy` | Answer Relevancy | 1.00 | 100% | 3 | $0.012 |
+| `test_rag_document_routing` | Routing assertion | 100% | 100% | 15 | $0.000 |
+
+The parental leave fix is confirmed in the precision results. The judge's own reasoning: "The relevant node ranked first provides comprehensive details stating 'Primary caregiver: 16 weeks fully paid'. The irrelevant nodes focus on emergency leave and unpaid leave, appropriately ranked lower." That sentence tells you the chunk boundary fix worked — the right content is now in its own chunk and ranking correctly.
+
+---
+
+### Metric Coverage Across Both Journeys
+
+Reading both evaluation sections together, the metric progression follows the evolution of ARIA's capability.
+
+Phase 1 established the baseline: does ARIA stay in character, answer relevantly, and avoid hallucination? These metrics treat ARIA as a black box — input in, output out, judge the output.
+
+Phase 2 opened the box: does the retrieval pipeline actually work? Faithfulness, precision, recall, and relevancy each examine a different aspect of the path from question to answer — not just the final answer. This is the difference between testing a car's top speed and testing whether the fuel injection, transmission, and brakes each work correctly.
+
+Answer Relevancy bridges both — established in Phase 1 as the output quality measure and carried into Phase 2 as the regression check. If a Phase 2 change caused it to drop, it would signal that something in the retrieval pipeline degraded response quality, not just retrieval quality. The fact that it improved from `0.98` to `1.00` confirms the opposite — grounding answers in documents made them better.
 
 ---
 
