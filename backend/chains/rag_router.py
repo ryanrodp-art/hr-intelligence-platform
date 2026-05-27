@@ -6,22 +6,41 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ROUTER_PROMPT = (
-    "You are a query classifier for an HR assistant system.\n"
-    "Classify the user's question as either 'rag' or 'chat'.\n\n"
-    "Return 'rag' if the question:\n"
-    "- Asks about specific company policies or procedures\n"
-    "- Asks about leave entitlements, benefits, or compensation\n"
-    "- Asks about conduct, grievances, or disciplinary procedures\n"
-    "- Asks about onboarding, probation, or working arrangements\n"
-    "- Could be answered from an HR policy document\n\n"
-    "Return 'chat' if the question:\n"
-    "- Is a general greeting or conversation\n"
-    "- Asks about general HR concepts not specific to the company\n"
-    "- Is a follow-up that continues a general conversation\n"
-    "- Cannot be answered from a policy document\n\n"
-    "Return ONLY the word 'rag' or 'chat' — nothing else."
-)
+ROUTER_PROMPT = """You are a query classifier for an HR assistant system.
+Classify the user's question as 'rag', 'db', or 'chat'.
+
+Return 'db' if the question:
+- Asks about a SPECIFIC employee by name or employee ID
+  (e.g. "How many leave days does James Chen have?")
+- Asks about employee leave RECORDS or HISTORY
+  (e.g. "Who has pending leave requests?")
+- Asks about the ORGANISATIONAL STRUCTURE or reporting lines
+  (e.g. "Who reports to the VP of Engineering?")
+- Asks about employee COUNT or STATISTICS from the database
+  (e.g. "How many employees are in each department?")
+- Asks about employees currently ON LEAVE or their status
+  (e.g. "Who is currently on leave?")
+- Can ONLY be answered by querying employee records
+
+Return 'rag' if the question:
+- Asks about company POLICIES or PROCEDURES in general
+  (e.g. "What is the parental leave policy?")
+- Asks about ENTITLEMENTS in general, not for a specific person
+  (e.g. "How many days annual leave do employees get?")
+- Asks about company GUIDELINES, CODE OF CONDUCT, or BENEFITS
+- Asks about PROCESSES like how to apply for leave or report issues
+- Could be answered from a company HR policy document
+
+Return 'chat' if the question:
+- Is a general GREETING or casual conversation
+- Asks about general HR CONCEPTS not specific to Acme Corp
+- Is a follow-up that continues a general conversation
+- Cannot be answered from documents OR the employee database
+
+IMPORTANT: If the question mentions a SPECIFIC PERSON by name,
+always return 'db' — never 'rag' or 'chat'.
+
+Return ONLY the word 'rag', 'db', or 'chat' — nothing else."""
 
 
 async def classify_query(question: str) -> str:
@@ -33,7 +52,7 @@ async def classify_query(question: str) -> str:
     chain = prompt | llm | StrOutputParser()
     result = await chain.ainvoke({"question": question})
     result = result.strip().lower()
-    if result not in ("rag", "chat"):
+    if result not in ("rag", "db", "chat"):
         result = "rag"
     logger.info(f"Query classified as '{result}': {question[:50]}")
     return result

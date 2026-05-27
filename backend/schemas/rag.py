@@ -15,3 +15,18 @@ class RAGResponse(BaseModel):
     query: str
     session_id: str
     model: str = "gpt-4o-rag"
+
+
+class DatabaseRAGRequest(BaseModel):
+    question: str = Field(min_length=1)
+    session_id: str = Field(default_factory=lambda: str(uuid4()))
+
+
+class DatabaseRAGResponseModel(BaseModel):
+    answer: str
+    sql_used: str
+    row_count: int
+    query: str
+    session_id: str
+    model: str = "gpt-4o-db"
+    success: bool

@@ -26,6 +26,12 @@ if "last_sources" not in st.session_state:
 if "last_answer_type" not in st.session_state:
     st.session_state.last_answer_type = "chat"
 
+if "last_sql_used" not in st.session_state:
+    st.session_state.last_sql_used = ""
+
+if "last_row_count" not in st.session_state:
+    st.session_state.last_row_count = 0
+
 # ── Sidebar ────────────────────────────────────────────────────────────────
 st.sidebar.title("⚙️ ARIA Configuration")
 st.sidebar.divider()
@@ -72,7 +78,15 @@ for message in st.session_state.messages:
                 "📄 **Sources:** " +
                 " · ".join(message["sources"])
             )
-        if message.get("answer_type"):
+        if message.get("answer_type") == "db":
+            row_count = message.get("row_count", 0)
+            sql = message.get("sql_used", "")
+            if row_count > 0:
+                st.caption(f"🗄️ Employee database · {row_count} record(s)")
+            if sql:
+                with st.expander("View database query"):
+                    st.code(sql, language="sql")
+        elif message.get("answer_type"):
             icon = "🔍" if message["answer_type"] == "rag" else "💬"
             label = "Company documents" if message["answer_type"] == "rag" \
                     else "General HR knowledge"
@@ -131,9 +145,37 @@ def stream_rag(question: str, session_id: str):
                     yield token
 
 
+def stream_db(question: str, session_id: str):
+    """Generator that streams tokens from the database RAG endpoint."""
+    with httpx.stream(
+        "POST",
+        f"{BACKEND_URL}/rag/db/stream",
+        json={"question": question, "session_id": session_id},
+        timeout=60,
+    ) as response:
+        for line in response.iter_lines():
+            if line.startswith("data: "):
+                data = json.loads(line[6:])
+                token = data.get("token", "")
+                if token == "[DONE]":
+                    break
+                elif token == "[ERROR]":
+                    break
+                elif token == "NOT_DB_QUERY":
+                    st.session_state.last_answer_type = "rag_fallback"
+                    break
+                elif "sql_used" in data:
+                    st.session_state.last_sql_used = data.get("sql_used", "")
+                    st.session_state.last_row_count = data.get("row_count", 0)
+                elif token:
+                    yield token
+
+
 # ── Chat input ─────────────────────────────────────────────────────────────
 if prompt := st.chat_input("Ask ARIA anything about HR..."):
     st.session_state.last_sources = []
+    st.session_state.last_sql_used = ""
+    st.session_state.last_row_count = 0
     st.session_state.last_answer_type = "chat"
 
     st.session_state.messages.append({"role": "user", "content": prompt})
@@ -153,7 +195,7 @@ if prompt := st.chat_input("Ask ARIA anything about HR..."):
 
     st.session_state.last_answer_type = classification
 
-    # Stream from the right endpoint
+    # Route to the correct chain
     with st.chat_message("assistant"):
         if classification == "rag":
             try:
@@ -170,6 +212,25 @@ if prompt := st.chat_input("Ask ARIA anything about HR..."):
                     " · ".join(st.session_state.last_sources)
                 )
             st.caption("🔍 Answered from company documents")
+
+        elif classification == "db":
+            try:
+                response_text = st.write_stream(
+                    stream_db(prompt, st.session_state.session_id)
+                )
+            except Exception as e:
+                st.error(f"❌ Could not reach ARIA backend: {str(e)}")
+                response_text = None
+
+            if st.session_state.last_row_count > 0:
+                st.caption(
+                    f"🗄️ Answered from employee database · "
+                    f"{st.session_state.last_row_count} record(s) found"
+                )
+            if st.session_state.last_sql_used:
+                with st.expander("View database query"):
+                    st.code(st.session_state.last_sql_used, language="sql")
+
         else:
             try:
                 response_text = st.write_stream(
@@ -187,5 +248,7 @@ if prompt := st.chat_input("Ask ARIA anything about HR..."):
             "role": "assistant",
             "content": response_text,
             "sources": st.session_state.last_sources,
+            "sql_used": st.session_state.last_sql_used,
+            "row_count": st.session_state.last_row_count,
             "answer_type": classification,
         })

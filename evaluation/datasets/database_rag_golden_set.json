@@ -1,0 +1,52 @@
+[
+  {
+    "input": "How many leave days does James Chen have?",
+    "expected_output": "James Chen has 30 days of leave remaining.",
+    "query_type": "employee_lookup"
+  },
+  {
+    "input": "What department is James Chen in?",
+    "expected_output": "James Chen is in the Engineering department and works as VP of Engineering.",
+    "query_type": "employee_lookup"
+  },
+  {
+    "input": "How many employees are in each department?",
+    "expected_output": "Engineering has 15 employees, Sales has 10, Finance has 9, HR has 8, Marketing has 8.",
+    "query_type": "aggregate"
+  },
+  {
+    "input": "How many employees are currently active?",
+    "expected_output": "There are 47 active employees at Acme Corp.",
+    "query_type": "aggregate"
+  },
+  {
+    "input": "Who has pending leave requests?",
+    "expected_output": "There are 6 employees with pending leave requests.",
+    "query_type": "join"
+  },
+  {
+    "input": "Who reports to the VP of Engineering?",
+    "expected_output": "Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering.",
+    "query_type": "join"
+  },
+  {
+    "input": "Who is currently on leave?",
+    "expected_output": "Isabella Fernandez is currently on leave.",
+    "query_type": "employee_lookup"
+  },
+  {
+    "input": "What is Isabella Fernandez's employee ID?",
+    "expected_output": "Isabella Fernandez's employee ID is EMP-0022.",
+    "query_type": "employee_lookup"
+  },
+  {
+    "input": "How many leave records are there in total?",
+    "expected_output": "There are 30 leave records in total.",
+    "query_type": "aggregate"
+  },
+  {
+    "input": "Show me employees in the HR department",
+    "expected_output": "There are 8 employees in the HR department.",
+    "query_type": "employee_lookup"
+  }
+]
