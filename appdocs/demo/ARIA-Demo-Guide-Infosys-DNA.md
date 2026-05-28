@@ -2,7 +2,7 @@
 ## Live Demo Guide — DeepEval GenAI/AgenticAI Validation Framework
 
 > **Audience:** Head of DNA · Product Manager · Principal Product Architect · de.ai Team
-> **Format:** 30-minute live demo + Q&A
+> **Format:** 45-minute live demo + Q&A
 > **Demo Machine:** MacBook (local environment)
 > **Repo:** Available on request post-demo
 
@@ -33,12 +33,23 @@ export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
 # 6. Verify health
 curl http://localhost:8000/health
 curl http://localhost:8000/rag/status
+
+# 7. Verify DB RAG endpoint
+curl -s -X POST http://localhost:8000/rag/db/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many leave days does James Chen have?"}' | python3 -m json.tool
+
+# 8. Verify three-way router
+curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Chen+have"
+# Expected: {"classification": "db"}
 ```
 
 **You should see before the demo starts:**
 - ✅ Streamlit UI open with "Backend Connected" in sidebar
 - ✅ Sidebar shows "📄 19 policy chunks indexed"
 - ✅ ARIA welcome message visible in chat
+- ✅ DB RAG query returns `{"answer": "James Chen has 30 days of leave remaining.", "success": true}`
+- ✅ Router returns `{"classification": "db"}` for the James Chen question
 - ✅ Terminal Tab 3 ready with env vars set
 
 ---
@@ -60,32 +71,35 @@ curl http://localhost:8000/rag/status
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    STREAMLIT UI                          │
-│          Chat interface · Source citations              │
-│          Routing badges · Conversation history          │
+│    Chat interface · Source citations · SQL expander     │
+│    Routing badges · DB record count · History           │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP (SSE streaming)
 ┌──────────────────────▼──────────────────────────────────┐
 │                   FASTAPI BACKEND                        │
-│    /chat/stream   /rag/stream   /rag/classify           │
-│    /rag/status    /chat/stats   /rag/query              │
+│  /chat/stream  /rag/stream  /rag/db/stream  /rag/query  │
+│  /rag/db/query  /rag/classify  /rag/status  /chat/stats │
 └──────┬──────────────────────────────────┬───────────────┘
        │                                  │
-┌──────▼──────────┐              ┌────────▼───────────────┐
-│  LANGCHAIN      │              │  RAG PIPELINE          │
-│  Chat Chain     │              │  Retriever             │
-│  Memory         │              │  RAG Chain             │
-│  GPT-4o (0.7)   │              │  GPT-4o (0.1)          │
-└─────────────────┘              └────────┬───────────────┘
-                                          │
-                        ┌─────────────────▼───────────────┐
-                        │         CHROMADB                 │
-                        │   19 vectors · hr_policies       │
-                        │   text-embedding-3-small         │
-                        └─────────────────────────────────┘
-┌─────────────────────────────────────────────────────────┐
-│                   POSTGRESQL                             │
-│   50 employees · 30 leave records · 50 org chart rows   │
-└─────────────────────────────────────────────────────────┘
+       │                    ┌─────────────▼──────────────┐
+       │                    │   THREE-WAY ROUTER          │
+       │                    │   GPT-4o · temperature=0   │
+       │                    │   "rag" / "db" / "chat"    │
+       │                    └──────┬─────────────┬───────┘
+       │                           │             │
+┌──────▼──────────┐    ┌───────────▼──┐   ┌─────▼──────────────┐
+│  LANGCHAIN      │    │  DOCUMENT    │   │  DATABASE RAG      │
+│  Chat Chain     │    │  RAG CHAIN   │   │  NL-to-SQL (GPT-4o)│
+│  Memory         │    │  Retriever   │   │  SQLAlchemy        │
+│  GPT-4o (0.7)   │    │  GPT-4o(0.1) │   │  GPT-4o (temp=0)   │
+└─────────────────┘    └──────┬───────┘   └─────┬──────────────┘
+                              │                  │
+              ┌───────────────▼──┐    ┌──────────▼──────────────┐
+              │    CHROMADB      │    │      POSTGRESQL          │
+              │  19 vectors      │    │  50 employees            │
+              │  hr_policies     │    │  30 leave records        │
+              │  text-embedding  │    │  50 org chart rows       │
+              └──────────────────┘    └─────────────────────────┘
 ```
 
 ### Capability Growth by Phase
@@ -94,8 +108,8 @@ curl http://localhost:8000/rag/status
 |---|---|---|
 | **0** *(Done)* | Infrastructure, seed data, stub responses | None — foundation only |
 | **1** *(Done)* | GPT-4o chat, memory, streaming | GEval, AnswerRelevancy, Hallucination |
-| **2** *(Done)* | Document RAG, citations, routing | + Faithfulness, ContextualPrecision, ContextualRecall |
-| **3** | Database RAG — live employee data | + DatabaseAccuracy, StructuredOutput |
+| **2** *(Done)* | Document RAG, citations, two-way routing | + Faithfulness, ContextualPrecision, ContextualRecall |
+| **3** *(Done)* | Database RAG, NL-to-SQL, three-way routing | + Faithfulness (DB), AnswerRelevancy (DB), RoutingBoundary |
 | **4** | Single agent with tools | + TaskCompletion, ToolCallAccuracy |
 | **5** | MCP server — real actions | + ToolSelectionAccuracy, ParameterCorrectness |
 | **6** | Multi-agent LangGraph | + OrchestratorAccuracy, AgentHandoffQuality |
@@ -246,9 +260,10 @@ PHASE 2 — Document RAG
 ├── ContextualRecallMetric         Does retrieval surface all needed info?
 └── AnswerRelevancyMetric          Regression check from Phase 1
 
-PHASE 3 — Database RAG  (planned)
-├── DatabaseAccuracy               Do SQL results match query intent?
-└── StructuredOutputMetric         Is the formatted response correct?
+PHASE 3 — Database RAG  (complete)
+├── FaithfulnessMetric (DB)        Are DB answers grounded in SQL rows returned?
+├── AnswerRelevancyMetric (DB)     Does the answer address the employee question?
+└── Routing Boundary (assertion)   Do DB questions route 'db', policy questions 'rag'?
 
 PHASE 4 — Single Agent  (planned)
 ├── TaskCompletionMetric           Did the agent complete the task?
@@ -387,6 +402,140 @@ Document routing: 15/15 classified as "rag" — PASSED
 
 ---
 
+## Demo Section G — Phase 3: Database RAG Demo *(4 minutes)*
+
+> *"Phase 3 gives ARIA a second knowledge source — the live employee database. Watch what happens when you ask questions that are about specific people, not policies. The router now has three paths: document search, database query, or general chat."*
+
+**Type these four messages — pause after each to show the SQL expander:**
+
+**Message 1:**
+```
+How many leave days does James Chen have?
+```
+*Point out:*
+- 🗄️ Answered from employee database · 1 record(s) found badge — this did NOT go to documents
+- `View database query` expander — click it and show the SQL
+- The SQL uses `ILIKE` for case-insensitive name matching — GPT-4o generated this from the question
+- Answer is specific: "James Chen has 30 days of leave remaining."
+- *Compare to Phase 2: would have returned "I don't have specific information about that in our company documents"*
+
+**Message 2:**
+```
+Who is currently on leave?
+```
+*Point out:*
+- "Isabella Fernandez is currently on leave." — name only, no role, no department, no location
+- This was explicitly designed: the prompt rules say WHO questions get name + direct answer only
+- Show the SQL — `WHERE e.status = 'On Leave'` — GPT-4o inferred the right column value
+- 1 record returned — this is real-time data from PostgreSQL, not a cached answer
+
+**Message 3:**
+```
+Who reports to the VP of Engineering?
+```
+*Point out:*
+- Multi-table JOIN — employees table joined to org_chart table
+- "Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering."
+- Show the SQL expander — subquery to find VP's employee_id, then JOIN to find their direct reports
+- The router classified this as `"db"` because it's an org chart question, not a policy question
+
+**Message 4:**
+```
+How many employees are in each department?
+```
+*Point out:*
+- Aggregate query with GROUP BY
+- "Engineering: 15, Sales: 10, Finance: 9, HR: 8, Marketing: 8" — total 50 employees
+- Immediately follow with a policy question to show the router switching paths:
+
+**Message 5 (immediate follow-up):**
+```
+What is the parental leave policy?
+```
+*Point out:*
+- Answer switches to 🔍 Answered from company documents — back to document RAG
+- Source citation reappears: Leave Policy, Page 1
+- SQL expander gone — this answer came from ChromaDB, not PostgreSQL
+- *"Same interface, two completely different knowledge sources. The router makes the decision transparently."*
+
+> *"The SQL expander is a deliberate design choice for enterprise AI. When an AI gives you a number about a specific employee, you want to be able to audit how it got there. The SQL is the audit trail."*
+
+---
+
+## Demo Section H — Phase 3: DeepEval Suite *(5 minutes)*
+
+> *"Phase 3 has four test functions. One runs instantly with no LLM judge — it's a pure routing assertion. Three use GPT-4o as the judge. I'll run the routing test live and walk through the results of the LLM-judged tests."*
+
+### Part 1 — Routing Boundary Test (live, ~15 seconds)
+
+**Run:**
+
+```bash
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v
+```
+
+**While it runs, narrate:**
+- *"This test makes 13 HTTP calls to the `/rag/classify` endpoint — no LLM judge involved, just pure assertions"*
+- *"10 database questions must classify as 'db'. 3 policy questions must classify as 'rag'. If the router regresses and starts sending employee questions to document search, this fails immediately"*
+- *"Zero cost, 13 seconds — this is what you run on every commit as a fast quality gate"*
+
+**When results appear:**
+
+```
+test_db_routing_boundary PASSED — 13/13 assertions correct
+Cost: $0.00 | Time: ~13s
+```
+
+**Point out the 13 assertions verified:**
+
+| Category | Count | Example |
+|---|---|---|
+| DB questions → `"db"` | 10 | "How many leave days does James Chen have?" |
+| Policy questions → `"rag"` | 3 | "What is the parental leave policy?" |
+
+> *"The three policy questions in this test are the Phase 2 regression check. Phase 3 added a new routing path — this test verifies it didn't break the Phase 2 document routing. That's the discipline: every new phase proves the previous phase still works."*
+
+---
+
+### Part 2 — LLM-Judged Database Tests (walk through results)
+
+> *"The three LLM-judged tests evaluate answer quality. Each gets FaithfulnessMetric and AnswerRelevancyMetric — the same metrics used in Phase 2, but now the retrieval_context is the formatted SQL result instead of document chunks."*
+
+**Run the three tests with sleep gaps:**
+
+```bash
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_employee_lookup -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregate_queries -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
+```
+
+**While each runs, narrate what it tests:**
+
+### test_db_employee_lookup *(~15 seconds)*
+> *"Three questions about specific employees — James Chen's leave balance, his department, and who is currently on leave. Faithfulness asks: does ARIA's answer contain only claims that appear in the database rows returned? If the SQL returns `leave_balance: 30` and ARIA says '30 days' — that's faithful. If ARIA adds '...and he's been with the company for 5 years' when hire date wasn't in the query — that's a faithfulness failure."*
+
+### test_db_aggregate_queries *(~15 seconds)*
+> *"Three aggregate questions — employees per department, active employee count, total leave records. The retrieval context is a GROUP BY result or a COUNT. Faithfulness here means: if the DB says Engineering has 15 employees, ARIA must say 15. Any number other than what the database returned is unfaithful."*
+
+### test_db_join_queries *(~12 seconds)*
+> *"Two JOIN questions — pending leave requests and VP Engineering direct reports. These are the hardest queries: two tables joined. The retrieval context has first_name, last_name, and job_title from the JOIN result. Answer Relevancy checks that ARIA answered the actual question — not just summarized the rows."*
+
+**Final Phase 3 Results:**
+
+| Test | Metric | Pass Rate | Cases | Cost | Time |
+|---|---|---|---|---|---|
+| Routing Boundary | 13 assertions | **100%** | 13 | $0.000 | ~13s |
+| Employee Lookup | Faithfulness + Relevancy | **100%** | 3 | ~$0.030 | ~15s |
+| Aggregate Queries | Faithfulness + Relevancy | **100%** | 3 | ~$0.030 | ~15s |
+| Join Queries | Faithfulness + Relevancy | **100%** | 2 | ~$0.020 | ~12s |
+
+> *"Phase 3 demonstrates something important: the exact same evaluation framework — DeepEval, FaithfulnessMetric, AnswerRelevancyMetric — works for both document retrieval and database retrieval. We changed what goes into retrieval_context. The evaluation infrastructure didn't change at all. That's the power of a framework-first approach."*
+
+---
+
 ## Enterprise Observability Roadmap *(2 minutes)*
 
 > *"Before I wrap up, I want to show you the proposed observability architecture for when this moves beyond proof of concept into production. This is directly relevant to de.ai's platform requirements."*
@@ -462,12 +611,15 @@ DeepEval was integrated from Phase 0 — not bolted on at the end. Every phase a
 Three metrics in Phase 1. Seven in Phase 2. The framework grows with the system — the same pattern applies through agents, MCP tools, and multi-agent orchestration.
 
 **3. Cost is not a barrier**
-$0.26 total across both evaluation suites. At enterprise scale with 50 agents and daily CI/CD runs, evaluation costs are still a rounding error compared to the cost of a hallucination reaching a client.
+Under $0.40 total across all three evaluation suites — chat, document RAG, and database RAG. At enterprise scale with 50 agents and daily CI/CD runs, evaluation costs are still a rounding error compared to the cost of a hallucination reaching a client. The routing boundary test is $0.00 — zero cost to run on every commit.
 
 **4. Framework-agnostic design**
 ARIA uses GPT-4o today. Swapping to Claude, Gemini, or a fine-tuned Llama model requires changing two lines in `.env`. The evaluation suite runs unchanged.
 
-**5. Data sovereignty is solved**
+**5. Hybrid knowledge architecture is production-ready**
+Phase 3 demonstrates that a single AI assistant can transparently switch between document retrieval (ChromaDB) and database querying (PostgreSQL) based on the nature of the question. The same router, the same streaming interface, the same evaluation framework. Enterprise HR systems always have both structured employee data and unstructured policy documents — ARIA handles both.
+
+**6. Data sovereignty is solved**
 SmithDB's self-hosted VPC deployment means no sensitive AI traces leave the Infosys infrastructure boundary — a non-negotiable requirement for enterprise financial, healthcare, and government clients.
 
 ---
@@ -494,6 +646,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 ))))
 ```
 This pattern is standard for monorepo pytest configurations.
+
+### The WHO Prompt Iteration — Database Answer Verbosity
+"Who is currently on leave?" initially returned "Isabella Fernandez, who is an HR Coordinator in the HR department, is on leave. She is based in our Singapore office." — accurate but unrequested detail. Three iterations were needed: first adding a WHO rule, then making it the first rule in the system prompt with explicit correct/wrong examples. The final rule: for WHO questions, respond with ONLY the person's name and the direct answer — no role, no department, no location unless explicitly asked. This is a production concern: enterprise HR chatbots that volunteer PII beyond what was asked create compliance exposure.
+
+### The NOT_DB_QUERY Sentinel Pattern
+When the NL-to-SQL model cannot answer a question from the database (e.g., "What is the annual leave policy?"), it returns the literal string `NOT_DB_QUERY` instead of SQL. This sentinel travels through the entire stack: the chain returns it, the API endpoint returns a fallback message, the streaming endpoint emits it as a token, and Streamlit catches it to set `last_answer_type = "rag_fallback"`. The sentinel pattern avoids exception handling for expected cases and keeps the code path explicit at every layer.
+
+### SQL Safety Validation
+Every SQL string generated by GPT-4o passes through `validate_sql()` before execution. Two checks: the statement must begin with `SELECT` (lowercased, stripped), and it must not contain dangerous keywords (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `CREATE`, `GRANT`, `REVOKE`) detected via word-boundary regex. This is defense-in-depth: the NL-to-SQL prompt already instructs SELECT-only, but the validator provides a hard gate regardless of prompt compliance. This is the correct pattern for any AI system that generates executable code or queries.
+
+### Double Call in /rag/db/stream
+The `/rag/db/stream` endpoint runs `db_rag_query_stream()` for the streaming tokens, then calls `db_rag_query()` a second time to get the SQL and row count for the metadata SSE event. This is an acknowledged double call — the same pattern as Phase 2's `/rag/stream`. The alternative (threading metadata through the async generator) adds complexity for ~0.5s overhead. Phase 7 refactors this with a wrapper that captures metadata from the first call and passes it through to the metadata event.
 
 ### Trailing Slash Convention
 FastAPI routes `POST /chat/` with trailing slash. `httpx` (and browsers) don't follow redirects on POST — so Streamlit must call `/chat/` not `/chat`. This is a FastAPI architectural decision to canonicalize routes. All internal callers use trailing slash consistently.
@@ -523,8 +687,21 @@ curl http://localhost:8000/health
 curl http://localhost:8000/rag/status
 curl http://localhost:8000/chat/stats
 
-# === CLASSIFICATION TEST ===
+# === CLASSIFICATION TEST — two-way and three-way ===
 curl "http://localhost:8000/rag/classify?query=What+is+the+parental+leave+policy"
+# Expected: {"classification": "rag"}
+
+curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Chen+have"
+# Expected: {"classification": "db"}
+
+# === DB RAG ENDPOINT TEST ===
+curl -s -X POST http://localhost:8000/rag/db/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "How many leave days does James Chen have?"}' | python3 -m json.tool
+
+curl -s -X POST http://localhost:8000/rag/db/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Who is currently on leave?"}' | python3 -m json.tool
 
 # === DEEPEVAL ENV VARS ===
 export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
@@ -544,9 +721,25 @@ uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_answer_
 sleep 60 && \
 uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_document_routing -v
 
+# === PHASE 3 EVALS ===
+# Routing boundary first (fast, no LLM judge — run before anything else)
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v
+
+# LLM-judged tests with sleep gaps
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_employee_lookup -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregate_queries -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
+
 # === DATABASE VERIFY ===
-docker exec -it hr_postgres psql -U hr_user -d hr_platform \
-  -c "SELECT COUNT(*) FROM employees;"   # Expected: 50
+docker exec -it hr_postgres psql -U postgres -d hr_platform \
+  -c "SELECT COUNT(*) FROM employees;"            # Expected: 50
+docker exec -it hr_postgres psql -U postgres -d hr_platform \
+  -c "SELECT COUNT(*) FROM leave_records;"        # Expected: 30
+docker exec -it hr_postgres psql -U postgres -d hr_platform \
+  -c "SELECT employee_id, first_name, last_name, leave_balance FROM employees WHERE first_name = 'James' AND last_name = 'Chen';"
 ```
 
 ---
@@ -557,13 +750,18 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
 |---|---|
 | Streamlit shows "Backend Offline" | Run Tab 1 uvicorn command |
 | Sidebar shows "Document search unavailable" | `curl http://localhost:8001/api/v2/heartbeat` — restart Docker if needed |
+| DB answer not showing SQL expander | Check that `/rag/db/stream` is sending `sql_used` in the metadata event |
+| `/rag/classify` returns `"chat"` for a DB question | Check that `rag_router.py` has three-way router — not the Phase 2 two-way version |
+| `/rag/db/query` returns 500 | Restart FastAPI — check that `from rag.database_rag.chain import db_rag_query` import is present in `routes/rag.py` |
+| DB answer returns `NOT_DB_QUERY` text in UI | Question was misclassified as `"db"` but GPT-4o returned NOT_DB_QUERY — question is policy-related, not a DB question |
 | DeepEval 429 rate limit error | Wait 60 seconds, re-run the specific test function |
 | DeepEval timeout error | Verify env vars set: `echo $DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE` |
 | `/rag/classify` returns 500 | Restart FastAPI — likely import error on startup |
 | Chat not streaming | Check trailing slash: must call `/chat/` not `/chat` |
 | Parental leave returns wrong answer | Re-run indexer: `uv run python -m vector_store.indexer` |
+| PostgreSQL connection error in DB RAG | Run `docker compose ps` — verify `hr_postgres` is healthy, not just running |
 
 ---
 
-*Document version: May 2026 | ARIA v0.2.0 | Phases 0–2 complete*
+*Document version: May 2026 | ARIA v0.3.0 | Phases 0–3 complete*
 *Built by: Ryan Rodrigues | Nu Skin Enterprises — Data Platform Architecture*
