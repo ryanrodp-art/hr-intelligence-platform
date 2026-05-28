@@ -211,7 +211,67 @@ What does the company contribute to the 401k?
 
 ---
 
-## Demo Section D — DeepEval Framework Explained *(4 minutes)*
+## Demo Section D — Phase 3: Database RAG Demo *(4 minutes)*
+
+> *"Phase 3 gives ARIA a second knowledge source — the live employee database. Watch what happens when you ask questions that are about specific people, not policies. The router now has three paths: document search, database query, or general chat."*
+
+**Type these four messages — pause after each to show the SQL expander:**
+
+**Message 1:**
+```
+How many leave days does James Chen have?
+```
+*Point out:*
+- 🗄️ Answered from employee database · 1 record(s) found badge — this did NOT go to documents
+- `View database query` expander — click it and show the SQL
+- The SQL uses `ILIKE` for case-insensitive name matching — GPT-4o generated this from the question
+- Answer is specific: "James Chen has 30 days of leave remaining."
+- *Compare to Phase 2: would have returned "I don't have specific information about that in our company documents"*
+
+**Message 2:**
+```
+Who is currently on leave?
+```
+*Point out:*
+- "Isabella Fernandez is currently on leave." — name only, no role, no department, no location
+- This was explicitly designed: the prompt rules say WHO questions get name + direct answer only
+- Show the SQL — `WHERE e.status = 'On Leave'` — GPT-4o inferred the right column value
+- 1 record returned — this is real-time data from PostgreSQL, not a cached answer
+
+**Message 3:**
+```
+Who reports to the VP of Engineering?
+```
+*Point out:*
+- Multi-table JOIN — employees table joined to org_chart table
+- "Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering."
+- Show the SQL expander — subquery to find VP's employee_id, then JOIN to find their direct reports
+- The router classified this as `"db"` because it's an org chart question, not a policy question
+
+**Message 4:**
+```
+How many employees are in each department?
+```
+*Point out:*
+- Aggregate query with GROUP BY
+- "Engineering: 15, Sales: 10, Finance: 9, HR: 8, Marketing: 8" — total 50 employees
+- Immediately follow with a policy question to show the router switching paths:
+
+**Message 5 (immediate follow-up):**
+```
+What is the parental leave policy?
+```
+*Point out:*
+- Answer switches to 🔍 Answered from company documents — back to document RAG
+- Source citation reappears: Leave Policy, Page 1
+- SQL expander gone — this answer came from ChromaDB, not PostgreSQL
+- *"Same interface, two completely different knowledge sources. The router makes the decision transparently."*
+
+> *"The SQL expander is a deliberate design choice for enterprise AI. When an AI gives you a number about a specific employee, you want to be able to audit how it got there. The SQL is the audit trail."*
+
+---
+
+## Demo Section E — DeepEval Framework Explained *(4 minutes)*
 
 > *"Before I run the evaluations live, let me explain what DeepEval is and why it was selected."*
 
@@ -286,7 +346,7 @@ PHASE 8 — Production  (planned)
 
 ---
 
-## Demo Section E — Phase 1 DeepEval Suite Live *(3 minutes)*
+## Demo Section F — Phase 1 DeepEval Suite Live *(3 minutes)*
 
 > *"Now I'll run the Phase 1 evaluation suite live. This is 5 test functions, 24 test cases, calling the live ARIA API and having GPT-4o judge every response."*
 
@@ -318,7 +378,7 @@ Overall: 24/24 passed
 
 ---
 
-## Demo Section F — Phase 2 DeepEval Suite Live *(9 minutes)*
+## Demo Section G — Phase 2 DeepEval Suite Live *(9 minutes)*
 
 > *"Phase 2 introduces four new RAG-specific metrics that don't exist in standard LLM evaluation. These are the metrics that matter for enterprise document AI."*
 
@@ -399,66 +459,6 @@ Document routing: 15/15 classified as "rag" — PASSED
 | **Total Phase 2** | | **1.00** | **100%** | **$0.07** |
 
 > *"$0.07 to run the full RAG evaluation suite. $0.19 for the full chat suite. Less than 30 cents to prove an AI system is working correctly. At enterprise scale with CI/CD, you run this on every pull request — it's the quality gate before any change goes to production."*
-
----
-
-## Demo Section G — Phase 3: Database RAG Demo *(4 minutes)*
-
-> *"Phase 3 gives ARIA a second knowledge source — the live employee database. Watch what happens when you ask questions that are about specific people, not policies. The router now has three paths: document search, database query, or general chat."*
-
-**Type these four messages — pause after each to show the SQL expander:**
-
-**Message 1:**
-```
-How many leave days does James Chen have?
-```
-*Point out:*
-- 🗄️ Answered from employee database · 1 record(s) found badge — this did NOT go to documents
-- `View database query` expander — click it and show the SQL
-- The SQL uses `ILIKE` for case-insensitive name matching — GPT-4o generated this from the question
-- Answer is specific: "James Chen has 30 days of leave remaining."
-- *Compare to Phase 2: would have returned "I don't have specific information about that in our company documents"*
-
-**Message 2:**
-```
-Who is currently on leave?
-```
-*Point out:*
-- "Isabella Fernandez is currently on leave." — name only, no role, no department, no location
-- This was explicitly designed: the prompt rules say WHO questions get name + direct answer only
-- Show the SQL — `WHERE e.status = 'On Leave'` — GPT-4o inferred the right column value
-- 1 record returned — this is real-time data from PostgreSQL, not a cached answer
-
-**Message 3:**
-```
-Who reports to the VP of Engineering?
-```
-*Point out:*
-- Multi-table JOIN — employees table joined to org_chart table
-- "Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering."
-- Show the SQL expander — subquery to find VP's employee_id, then JOIN to find their direct reports
-- The router classified this as `"db"` because it's an org chart question, not a policy question
-
-**Message 4:**
-```
-How many employees are in each department?
-```
-*Point out:*
-- Aggregate query with GROUP BY
-- "Engineering: 15, Sales: 10, Finance: 9, HR: 8, Marketing: 8" — total 50 employees
-- Immediately follow with a policy question to show the router switching paths:
-
-**Message 5 (immediate follow-up):**
-```
-What is the parental leave policy?
-```
-*Point out:*
-- Answer switches to 🔍 Answered from company documents — back to document RAG
-- Source citation reappears: Leave Policy, Page 1
-- SQL expander gone — this answer came from ChromaDB, not PostgreSQL
-- *"Same interface, two completely different knowledge sources. The router makes the decision transparently."*
-
-> *"The SQL expander is a deliberate design choice for enterprise AI. When an AI gives you a number about a specific employee, you want to be able to audit how it got there. The SQL is the audit trail."*
 
 ---
 
