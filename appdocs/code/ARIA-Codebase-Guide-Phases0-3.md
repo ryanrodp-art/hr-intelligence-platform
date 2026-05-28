@@ -1,4 +1,4 @@
-# ARIA Codebase Guide — Phases 0–2
+# ARIA Codebase Guide — Phases 0–3
 ## Understanding the Code in Execution Order
 
 > **How to use this guide:** Open your code editor on one side, this document on the other.
@@ -8,9 +8,9 @@
 
 ---
 
-## The Two Journeys
+## The Three Journeys
 
-Everything in this codebase serves one of two request flows:
+Everything in this codebase serves one of three request flows:
 
 **Journey 1 — CHAT**
 > *"Hello ARIA, what can you help me with?"*
@@ -20,9 +20,13 @@ Everything in this codebase serves one of two request flows:
 > *"What is the parental leave policy?"*
 > A policy question retrieved from HR documents, answered with citations.
 
-Both journeys start at the same place — the Streamlit UI — and end at the same place — a streamed response in the browser. What happens in between is different.
+**Journey 3 — DATABASE RAG**
+> *"How many leave days does James Chen have?"*
+> An employee-specific question converted to SQL, executed against PostgreSQL, answered from live data.
 
-Read Journey 1 first. Journey 2 builds on everything Journey 1 establishes.
+All three journeys start at the same place — the Streamlit UI — and end at the same place — a streamed response in the browser. A single classifier (the query router) decides which journey handles each request. What happens in between is different.
+
+Read Journey 1 first. Journey 2 builds on everything Journey 1 establishes. Journey 3 builds on both.
 
 ---
 
@@ -511,9 +515,9 @@ Two Pydantic models:
 
 **How it works:**
 
-`classify_query(question)` — sends the question to GPT-4o with a classification prompt and `temperature=0`. Zero temperature means deterministic — the same question always gets the same classification. Returns one of: `"rag"` (document question), `"chat"` (general conversation), or in Phase 3+ `"db"` (employee data question).
+`classify_query(question)` — sends the question to GPT-4o with a classification prompt and `temperature=0`. Zero temperature means deterministic — the same question always gets the same classification. Returns one of three values: `"rag"` (document question), `"db"` (employee data question), or `"chat"` (general conversation).
 
-The classification prompt lists specific criteria for each category. "What is our parental leave policy?" → `"rag"`. "Hello, how are you?" → `"chat"`. "How many leave days does James Chen have?" → `"db"` in Phase 3.
+The classification prompt lists specific criteria for each category. "What is our parental leave policy?" → `"rag"`. "How many leave days does James Chen have?" → `"db"`. "Hello, how are you?" → `"chat"`. A critical rule built into the prompt: if the question mentions a specific person by name, always return `"db"` — no exception. This prevents "What are Isabella Fernandez's leave dates?" from being routed to ChromaDB where no employee records exist.
 
 If GPT-4o returns anything other than a known classification, the router defaults to `"rag"` — conservative fallback that searches documents rather than refusing to answer.
 
@@ -783,8 +787,396 @@ Answer Relevancy bridges both — established in Phase 1 as the output quality m
 
 ---
 
+# JOURNEY 3 — DATABASE RAG
+
+## The Database RAG Request Flow
+
+```
+User types employee question in browser
+        ↓
+frontend/app.py              calls /rag/classify first
+        ↓ GET /rag/classify
+backend/api/routes/rag.py    calls classify_query()
+        ↓
+backend/chains/rag_router.py GPT-4o classifies as "db"
+        ↓
+frontend/app.py              routes to stream_db()
+        ↓ POST /rag/db/stream
+backend/api/routes/rag.py    calls db_rag_query_stream()
+        ↓
+backend/schemas/rag.py       DatabaseRAGRequest validated here
+        ↓
+rag/database_rag/chain.py    orchestrates NL-to-SQL + execution + generation
+        ↓
+rag/database_rag/nl_to_sql.py converts question to validated SQL
+        ↓
+rag/database_rag/executor.py  runs SQL against PostgreSQL
+        ↓
+rag/database_rag/chain.py     sends DB rows + question to GPT-4o
+        ↓ tokens + metadata stream back up
+frontend/app.py               renders answer + SQL expander + record count badge
+```
+
+**Unlike Document RAG, no one-time setup step is needed.** The data already lives in PostgreSQL from the Phase 0 seed. The pipeline converts questions to SQL on every request — the database is always live.
+
+**The four-stage pipeline:**
+```
+Stage 1: generate_validated_sql(question)
+         GPT-4o reads schema → generates SELECT → validate_sql() gates it
+         → sql, is_valid, error_msg
+
+Stage 2: execute_query(sql)
+         SQLAlchemy runs SQL against PostgreSQL
+         → QueryResult(rows, columns, row_count)
+
+Stage 3: format_results_for_llm(result)
+         Rows formatted as human-readable text
+         → "Query returned 1 record:\n  leave_balance: 30"
+
+Stage 4: GPT-4o with DB_ANSWER_SYSTEM_PROMPT
+         Converts formatted rows into a natural language answer
+         → "James Chen has 30 days of leave remaining."
+```
+
+---
+
+## File 1 — `rag/database_rag/schema.py`
+
+**What it is:** The database schema description embedded directly into the NL-to-SQL prompt. GPT-4o reads this before writing any SQL.
+
+**Where it fits:** Called by `nl_to_sql.py` at query time. Its output becomes the top portion of the NL-to-SQL system prompt.
+
+**How it works:**
+`DATABASE_SCHEMA_DESCRIPTION` is a multi-line constant string that describes all three tables — `employees`, `leave_records`, and `org_chart` — with their column names, types, and allowed enum values. It also includes SQL rules: always use table aliases (`e`, `lr`, `o`), use `ILIKE` for name matching, default `LIMIT 10`, never `SELECT *`, join `leave_records` to `employees` on `employee_id`.
+
+**Key functions:**
+
+`get_schema_description()` — returns `DATABASE_SCHEMA_DESCRIPTION` unchanged. A function wrapper rather than direct constant access so it can be mocked in tests.
+
+`get_table_samples()` — queries the live database for 3 rows from each table and formats them as readable text. Gives GPT-4o concrete examples of what the data looks like — column names alongside real values rather than abstract types.
+
+`get_full_context()` — combines `get_schema_description()` and `get_table_samples()` into a single string. This combined string is what goes into the NL-to-SQL prompt.
+
+**The design decision worth noting:**
+Schema description is a static constant, not a live `information_schema` query. This is intentional: live schema queries add latency, can return too much noise (internal system tables, temporary objects), and don't include the business rules — enum values, join conventions, naming rules. A hand-authored description is more useful to the model than auto-generated schema metadata.
+
+---
+
+## File 2 — `rag/database_rag/nl_to_sql.py`
+
+**What it is:** The NL-to-SQL engine — converts a natural language question into a validated PostgreSQL SELECT statement.
+
+**Where it fits:** Called by `chain.py` at Stage 1. The deepest point before SQL hits the database.
+
+**How it works:**
+`NL_TO_SQL_SYSTEM_PROMPT` is a 10-rule instruction set prepended with the full schema context. The rules are strict: SELECT only, use aliases, ILIKE for names, LIMIT 10, no `SELECT *`, return `NOT_DB_QUERY` for questions that can't be answered from the database, return only the SQL with no markdown or explanation.
+
+**Key functions:**
+
+`generate_sql(question)` — synchronous. Builds the prompt from the system rules plus schema context, calls GPT-4o at `temperature=0` (SQL generation must be deterministic), and returns the stripped result string. Called inside the async `generate_validated_sql()`.
+
+`validate_sql(sql)` — two hard checks. First: the statement must start with `SELECT` (lowercased, stripped). Second: a word-boundary regex screens for dangerous keywords — `DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `CREATE`, `GRANT`, `REVOKE`. Returns `(True, "")` on pass or `(False, error_message)` on failure.
+
+`generate_validated_sql(question)` — async wrapper. Calls `generate_sql()`, checks for the `NOT_DB_QUERY` sentinel, then calls `validate_sql()`. Returns a tuple of `(sql, is_valid, error_message)`.
+
+**The `NOT_DB_QUERY` sentinel:**
+When GPT-4o determines the question cannot be answered from the employee database — typically policy questions like "What is the annual leave policy?" — it returns the literal string `NOT_DB_QUERY` instead of SQL. This sentinel travels up the entire stack: `generate_validated_sql()` returns it, `chain.py` detects it and returns `answer="NOT_DB_QUERY"`, the API endpoint detects it and returns a fallback message, and the streaming endpoint emits it as a token so Streamlit can set `last_answer_type = "rag_fallback"`. The sentinel pattern keeps the failure path explicit at every layer without exceptions.
+
+**The design decision worth noting:**
+`validate_sql()` is defense-in-depth. The NL-to-SQL prompt already instructs SELECT-only. The validator provides a hard gate regardless of prompt compliance — it will catch any case where the model deviates. The word-boundary regex (`\b(DROP|DELETE|...)\b`) ensures that column names like `update_date` don't trip the filter.
+
+---
+
+## File 3 — `rag/database_rag/executor.py`
+
+**What it is:** The SQL execution layer — runs a validated SQL string against PostgreSQL and returns structured results.
+
+**Where it fits:** Called by `chain.py` at Stage 2. The only file that touches PostgreSQL directly in the DB RAG pipeline.
+
+**How it works:**
+Defines a `QueryResult` dataclass with six fields: `success`, `rows` (list of dicts), `row_count`, `columns`, `error`, and `sql_executed`. This structure is the contract between execution and formatting — everything downstream works with `QueryResult`, never with raw database cursors.
+
+**Key functions:**
+
+`execute_query(sql)` — the main function. Creates a SQLAlchemy engine from `settings.database_url`, opens a connection, executes the SQL, converts each row to a dict by zipping column names with values, and serializes any `datetime.date` or `datetime.datetime` values to ISO format strings. Returns a successful `QueryResult`. On `SQLAlchemyError` or any other exception, returns a failed `QueryResult` with the error message — the error is logged but never surfaced raw to the user.
+
+`format_results_for_llm(result)` — converts a `QueryResult` into human-readable text that GPT-4o can parse at Stage 4. Format:
+```
+Query returned 1 record(s):
+
+Record 1:
+  employee_id: EMP-0001
+  first_name: James
+  leave_balance: 30
+```
+This format is readable by both GPT-4o (for answer generation) and humans (for debugging). It's what goes into `retrieval_context` in DeepEval test cases.
+
+`get_database_stats()` — runs five COUNT queries in a single connection to return totals for employees, leave records, org chart rows, active employees, and pending leave requests. Used by admin diagnostics, not in the live request path.
+
+**The design decision worth noting:**
+Date serialization (`value.isoformat()`) happens in `execute_query()`, not in the formatter. SQLAlchemy returns Python `datetime.date` objects — these can't be JSON-serialized directly and would crash the API if returned in a response dict. Serializing at the executor level means every layer above it works with plain strings. The formatter never needs to handle date objects.
+
+---
+
+## File 4 — `rag/database_rag/chain.py`
+
+**What it is:** The DB RAG orchestrator — coordinates the four-stage NL-to-SQL-to-answer pipeline.
+
+**Where it fits:** Called by the RAG route when classification is `"db"`. The deepest point in the DB RAG flow.
+
+**How it works:**
+`DB_ANSWER_SYSTEM_PROMPT` is the instruction constant for Stage 4. Unlike the NL-to-SQL prompt (which is strict technical rules), this prompt is about presentation style. Its most important rule — placed first — governs WHO questions: for questions asking who did something or who is in a state, respond with ONLY the person's name and the direct answer. No role, no department, no location, no unrequested context. This rule required three iterations during Phase 3 development before the answers were acceptably concise (see Phase 3 Build Guide for the iteration history).
+
+**Key functions:**
+
+`db_rag_query(question)` — async, non-streaming. Runs all four pipeline stages sequentially. Returns a `DatabaseRAGResponse` dataclass. Used by DeepEval test suite via the `/rag/db/query` endpoint.
+
+`db_rag_query_stream(question)` — async generator. Same four stages but Stage 4 uses `streaming=True` LLM and `chain.astream()`. Yields answer tokens as they arrive. Yields `"NOT_DB_QUERY"` early if the question can't be answered from the database. Used by Streamlit via the `/rag/db/stream` endpoint.
+
+`build_db_answer_prompt()` — builds the `ChatPromptTemplate` for Stage 4. The human message includes three variables: `{question}`, `{sql_used}` (the actual SQL executed), and `{query_results}` (the formatted rows). GPT-4o sees all three — the question provides intent, the SQL provides what was queried, and the rows provide what was found.
+
+**The design decision worth noting:**
+`temperature=0` for Stage 4 answer generation. This is significantly lower than the chat chain's `0.7`. Employee data answers are factual — ARIA must say "30 days" when the database says `leave_balance: 30`. Any temperature above zero risks paraphrasing numbers or adding uncertainty qualifiers ("approximately 30 days"). Zero temperature locks the answer to what the data says.
+
+---
+
+## Updated File — `backend/schemas/rag.py` (Phase 3 additions)
+
+Phase 3 adds two Pydantic models to the existing `rag.py` schema file:
+
+`DatabaseRAGRequest` — what Streamlit sends for a DB RAG query. Two fields: `question` (required, minimum 1 character) and `session_id` (auto-generated UUID if not provided). Simpler than `RAGRequest` because DB RAG has no `top_k` — the SQL result set is determined by the query, not a retrieval parameter.
+
+`DatabaseRAGResponseModel` — what FastAPI sends back from `/rag/db/query`. Seven fields: `answer`, `sql_used` (the actual SQL for transparency), `row_count`, `query` (original question echoed), `session_id`, `model` (always `"gpt-4o-db"` to distinguish from document RAG responses), and `success`.
+
+**The design decision worth noting:**
+`sql_used` is a first-class field in `DatabaseRAGResponseModel`. This is the audit trail — when ARIA says "James Chen has 30 days", the response carries the SQL that produced that number. DeepEval test cases log this. Streamlit displays it in an expander. Enterprise clients can review it. The SQL is the proof.
+
+---
+
+## Updated File — `backend/api/routes/rag.py` (Phase 3 additions)
+
+Phase 3 adds two new endpoints before the existing `/classify` endpoint:
+
+**`POST /rag/db/query`** — the non-streaming endpoint for DeepEval. Calls `db_rag_query()`, waits for the complete `DatabaseRAGResponse`, and returns it as a JSON object. If the response `answer` is `"NOT_DB_QUERY"`, returns a structured fallback message explaining the question needs document search.
+
+**`POST /rag/db/stream`** — the streaming endpoint for Streamlit. An async generator calls `db_rag_query_stream()` and wraps each yielded chunk as an SSE event: `data: {"token": "..."}\n\n`. After all tokens are yielded, it runs `db_rag_query()` a second time to retrieve the metadata (`sql_used` and `row_count`) and emits them as a special metadata event: `data: {"sql_used": "SELECT...", "row_count": 1}\n\n`. Then sends `data: {"token": "[DONE]"}\n\n`.
+
+The second `db_rag_query()` call is acknowledged technical debt — the async generator yields tokens but has no mechanism to surface the SQL metadata alongside them. The alternative (threading metadata through the generator via a shared mutable object) adds complexity for ~0.5s overhead. Phase 7 refactors this with a wrapper that captures Stage 2 output on the first pass.
+
+---
+
+## Updated File — `frontend/app.py` (Phase 3 additions)
+
+Phase 3 adds two session state keys and one streaming generator to the existing `app.py`:
+
+**New session state:**
+- `last_sql_used = ""` — stores the SQL captured from the DB metadata SSE event
+- `last_row_count = 0` — stores the row count from the same event
+
+Both are reset to their defaults at the start of every new user input alongside the existing `last_sources` reset.
+
+**`stream_db(question, session_id)`** — the DB streaming generator. Same structure as `stream_rag()` but connects to `/rag/db/stream`. Watches for three special tokens: `"[DONE]"` (break), `"[ERROR]"` (break), and `"NOT_DB_QUERY"` (sets `last_answer_type = "rag_fallback"`, break). Watches for data events containing `"sql_used"` (captures `last_sql_used` and `last_row_count`). Yields all other tokens to `st.write_stream()`.
+
+**The `"db"` routing branch:**
+```python
+elif classification == "db":
+    response_text = st.write_stream(stream_db(prompt, session_id))
+    if last_row_count > 0:
+        st.caption(f"🗄️ Answered from employee database · {last_row_count} record(s) found")
+    if last_sql_used:
+        with st.expander("View database query"):
+            st.code(last_sql_used, language="sql")
+```
+
+The SQL expander is a deliberate transparency feature. When ARIA gives a number about a specific employee, the user can expand the panel to see exactly what SQL query produced it — the query is the audit trail.
+
+**History display:** Past messages with `answer_type == "db"` show the record count caption and SQL expander on replay, same as when the message was first generated. `sql_used` and `row_count` are stored in the message dict alongside the answer text.
+
+---
+
+## The Complete DB RAG Flow — One Message
+
+```
+1. User types "How many leave days does James Chen have?"
+2. app.py calls GET /rag/classify?query=How+many+leave+days...
+3. rag_router.py: GPT-4o at temperature=0 reads question
+   → question mentions a person by name → "db"
+4. app.py: classification is "db" → calls stream_db()
+5. stream_db() opens POST /rag/db/stream with httpx.stream()
+6. routes/rag.py receives DatabaseRAGRequest → validates
+7. route calls db_rag_query_stream("How many leave days does James Chen have?")
+8. chain.py calls generate_validated_sql(question)
+9. nl_to_sql.py: GPT-4o at temperature=0 reads schema + question
+   → generates: SELECT e.employee_id, e.first_name, e.last_name, e.leave_balance
+                FROM employees e
+                WHERE e.first_name ILIKE 'James' AND e.last_name ILIKE 'Chen'
+                LIMIT 10
+10. nl_to_sql.py: validate_sql() checks → starts with SELECT, no dangerous keywords → valid
+11. chain.py calls execute_query(sql)
+12. executor.py: SQLAlchemy creates engine → executes → fetches rows
+    → QueryResult(success=True, rows=[{employee_id: "EMP-0001", first_name: "James",
+       last_name: "Chen", leave_balance: 30}], row_count=1)
+13. chain.py calls format_results_for_llm(result)
+    → "Query returned 1 record(s):\n\nRecord 1:\n  employee_id: EMP-0001\n  leave_balance: 30"
+14. chain.py builds prompt: DB_ANSWER_SYSTEM_PROMPT + question + sql_used + formatted rows
+15. GPT-4o at temperature=0 generates: "James Chen has 30 days of leave remaining."
+16. chain.py yields each token via astream()
+17. route wraps each token: data: {"token": "James"}\n\n → StreamingResponse
+18. After all tokens: route runs db_rag_query() again → gets sql_used + row_count
+19. data: {"sql_used": "SELECT e.employee_id...", "row_count": 1}\n\n
+20. data: {"token": "[DONE]"}\n\n
+21. stream_db() in app.py: captures sql_used → session_state.last_sql_used
+22. stream_db() captures row_count → session_state.last_row_count
+23. stream_db() yields tokens to st.write_stream()
+24. st.write_stream() renders: "James Chen has 30 days of leave remaining."
+25. st.write_stream() returns complete text → saved to session_state.messages
+26. app.py displays: st.caption("🗄️ Answered from employee database · 1 record(s) found")
+27. app.py displays: st.expander("View database query") → st.code(sql, language="sql")
+```
+
+---
+
+## Journey 3 — DeepEval Evaluation
+
+The DB RAG evaluation journey mirrors the document RAG journey structurally — same pytest patterns, same `evaluate()` and `assert` approach. Two things change: the source of `retrieval_context`, and what the metrics measure.
+
+### The Evaluation Flow
+
+```
+evaluation/datasets/database_rag_golden_set.json   10 questions + expected answers + query_type
+        ↓ loaded once by db_golden_set fixture
+evaluation/tests/test_database_rag.py               pytest collects 4 test functions
+        ↓ each LLM-judged test calls get_db_response() AND get_db_context()
+backend/api/routes/rag.py                            POST /rag/db/query — same endpoint as non-streaming
+        ↓ ARIA generates SQL, executes, answers
+rag/database_rag/nl_to_sql.py + executor.py         called directly to get the SQL result
+        ↓ both the answer AND the formatted SQL rows collected
+evaluation/tests/test_database_rag.py               LLMTestCase built with retrieval_context=[formatted_rows]
+        ↓ sent to DeepEval evaluate()
+DeepEval judge                                       reads: question + answer + SQL result rows
+        ↓ scores faithfulness and answer relevancy
+pytest                                               asserts all scores above threshold
+```
+
+**The critical difference from Document RAG:** In document RAG, `retrieval_context` is a list of chunk texts from ChromaDB. In database RAG, `retrieval_context` is a list containing the formatted SQL result — what `format_results_for_llm()` returned. This is the text GPT-4o actually saw when generating the answer. The faithfulness judge checks ARIA's claims against the SQL rows, not against document chunks.
+
+---
+
+### File: `evaluation/datasets/database_rag_golden_set.json`
+
+**What it is:** The answer key for DB RAG — 10 manually written question and expected answer pairs across three query types.
+
+**Where it fits:** Loaded by the `db_golden_set` fixture and shared across all four test functions.
+
+**How it works:**
+Each entry has three fields: `input` (the question), `expected_output` (the specific expected answer), and `query_type` (one of `"employee_lookup"`, `"aggregate"`, or `"join"`). The query type field lets each test function filter to its relevant subset without hardcoding row indexes.
+
+**Expected outputs are specific and verifiable:**
+- `"James Chen has 30 days of leave remaining."` — exact number from the database
+- `"Isabella Fernandez is currently on leave."` — name only, matching the WHO rule
+- `"Isabella Fernandez's employee ID is EMP-0022."` — confirmed by querying the live database directly
+- `"Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering."` — names and roles only, no location
+
+The 10 entries spread across three query categories: 5 employee lookups (single-table SELECT with WHERE), 3 aggregates (COUNT and GROUP BY), and 2 joins (employees + leave_records or employees + org_chart). This ensures evaluation covers simple lookups, summary statistics, and multi-table queries.
+
+---
+
+### File: `evaluation/tests/test_database_rag.py`
+
+**What it is:** Four test functions covering database answer quality from multiple angles — employee lookup, aggregate queries, multi-table joins, and routing boundary assertion.
+
+**Where it fits:** Same position as `test_document_rag.py` — the endpoint of the evaluation flow that exercises the live application.
+
+**How it works:**
+
+**`get_db_response(question)`** — posts to `POST /rag/db/query` and returns the full response dict including `answer`, `sql_used`, and `row_count`. A `time.sleep(0.5)` spaces out API calls to respect rate limits.
+
+**`get_db_context(question)`** — calls `generate_validated_sql()` and `execute_query()` directly to get the raw SQL result, then `format_results_for_llm()` to format it. Returns `[formatted_result_string]` — a list with one element (the full formatted rows). This is `retrieval_context` for every DB RAG test case.
+
+**The `sys.path.insert` at the top** — identical pattern to `test_document_rag.py`. The three-level path climb is required for `from rag.database_rag.nl_to_sql import generate_validated_sql` to resolve from inside `evaluation/tests/`.
+
+**`asyncio.run()` inside `get_db_context()`** — `generate_validated_sql()` is an async function but `get_db_context()` is called from synchronous test code. `asyncio.run()` creates a temporary event loop, runs the coroutine to completion, and returns the result. This is the standard pattern for calling async code from a synchronous context in pytest.
+
+---
+
+### The Two DB RAG Metrics
+
+**`FaithfulnessMetric(threshold=0.8, model="gpt-4o")`**
+
+Same metric as Phase 2, different context source. The judge reads ARIA's answer and the formatted SQL result rows — the same text that was in the GPT-4o prompt at Stage 4. It checks every factual claim in ARIA's answer: does this claim appear in the SQL rows? If ARIA says "James Chen has 30 days" and the rows show `leave_balance: 30` — faithful. If ARIA says "James Chen has been with the company since 2019" when `hire_date` wasn't in the query — unfaithful. Threshold `0.8` rather than the document RAG threshold — DB answers are simpler (fewer compound facts), making `0.8` a rigorous standard.
+
+**`AnswerRelevancyMetric(threshold=0.7, model="gpt-4o")`**
+
+Carried from Phase 2, same mechanism. Generates hypothetical questions that ARIA's response would answer well and measures how many match the original. For "How many leave days does James Chen have?" → ARIA says "James Chen has 30 days of leave remaining." The judge generates: "What is James Chen's leave balance?" — that matches perfectly. Relevancy `1.0`. The metric confirms ARIA answered the actual question rather than summarizing the SQL result generically. Threshold `0.7`.
+
+---
+
+### The Four Test Functions
+
+**`test_db_employee_lookup`** covers the first 3 entries with `query_type == "employee_lookup"` — James Chen's leave balance, James Chen's department, and who is currently on leave. Both Faithfulness and Answer Relevancy are run against each. These are the simplest queries (single-table SELECT with a WHERE clause) so they serve as the happy-path test for the DB RAG pipeline. A faithfulness failure here would indicate Stage 4 is adding unrequested information beyond what the SQL returned.
+
+**`test_db_aggregate_queries`** covers the first 3 entries with `query_type == "aggregate"` — employees per department, total active employee count, and total leave records count. Both metrics applied. Aggregate queries return a single number or a small summary set. Faithfulness here means: if the database says 47 active employees, ARIA must say 47. Any other number is a hallucination against the SQL result.
+
+**`test_db_join_queries`** covers all entries with `query_type == "join"` — pending leave requests (employees JOIN leave_records) and VP Engineering direct reports (employees JOIN org_chart). Both metrics applied. JOIN queries are the most complex: two tables, subqueries for org chart lookup, multiple columns in the result. Answer Relevancy confirms that ARIA answered the WHO question with names rather than a raw table dump.
+
+**`test_db_routing_boundary`** covers all 10 golden set questions plus 3 hardcoded policy questions. **No LLM judge, no rate limit risk, zero cost.** A pure Python assertion loop: for each DB question, calls `GET /rag/classify?query=...` and asserts `classification == "db"`. For each policy question, asserts `classification == "rag"`. If any single assertion fails, the test reports exactly which question routed incorrectly and what it got instead. This test runs first and finishes in ~13 seconds — it's the fast quality gate that catches routing regressions before any LLM-judged tests run.
+
+The 3 hardcoded policy questions are the Phase 2 regression check embedded into Phase 3: "What is the parental leave policy?", "How do I report a harassment complaint?", "What is the remote work policy?" Adding a third routing path in Phase 3 could have broken the `"rag"` path — this test proves it didn't.
+
+---
+
+### Run Commands
+
+```bash
+# Required env vars — set once per terminal session
+export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
+export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
+
+# Run routing test first — fast, no judge, catches wiring issues before spending on LLM calls
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v
+
+# Run LLM-judged tests with sleep gaps
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_employee_lookup -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregate_queries -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
+```
+
+---
+
+### Phase 3 Baseline Results
+
+**Routing boundary: 13/13 passed, $0.00, ~13 seconds**
+
+| Test Function | Metric | Pass Rate | Cases | Cost |
+|---|---|---|---|---|
+| `test_db_routing_boundary` | Routing assertion (no judge) | **100%** | 13 | $0.000 |
+| `test_db_employee_lookup` | Faithfulness + Answer Relevancy | 100% | 3 | ~$0.030 |
+| `test_db_aggregate_queries` | Faithfulness + Answer Relevancy | 100% | 3 | ~$0.030 |
+| `test_db_join_queries` | Faithfulness + Answer Relevancy | 100% | 2 | ~$0.020 |
+
+The routing boundary result is the most important finding: 10 database questions route to `"db"`, 3 policy questions route to `"rag"`, zero misclassifications. This confirms the three-way router works correctly and the Phase 2 document routing is regression-free.
+
+---
+
+### Metric Coverage Across All Three Journeys
+
+Reading all three evaluation sections together, the metric progression follows the capability growth.
+
+Phase 1 treats ARIA as a black box: does the output have the right character, relevance, and absence of hallucination? These metrics have no knowledge of how the answer was produced.
+
+Phase 2 opens the retrieval pipeline: are the chunks faithful, ranked correctly, complete, and relevant? These metrics require `retrieval_context` — they examine the path from question to answer, not just the answer itself. Answer Relevancy bridges Phase 1 and Phase 2 as the regression check.
+
+Phase 3 applies the same retrieval-quality thinking to a completely different data source. Faithfulness and Answer Relevancy now evaluate SQL result accuracy rather than document chunk accuracy. `retrieval_context` is the formatted SQL result instead of chunk texts. The evaluation framework doesn't change — only what goes into the context field.
+
+The routing boundary assertion (Phase 3) is the cross-phase regression test: it proves that adding a third path didn't break the existing two. This pattern — every new phase includes a test that validates all previous phases — is the discipline that makes incremental capability expansion safe.
+
+---
+
 # FOUNDATION FILES
-*These files support both journeys. Explained here once.*
+*These files support all three journeys. Explained here once.*
 
 ---
 
@@ -846,7 +1238,7 @@ backend/main.py
 frontend/app.py
 ```
 
-**If you want to understand the RAG path, open these files in this order:**
+**If you want to understand the document RAG path, open these files in this order:**
 ```
 scripts/create_documents.py         (understand the source data)
 rag/document_rag/ingestion.py       (PDF → text)
@@ -856,9 +1248,22 @@ vector_store/indexer.py             (orchestrates ingestion)
 rag/document_rag/retriever.py       (question → chunks)
 rag/document_rag/chain.py           (chunks + question → answer)
 backend/schemas/rag.py              (request/response shapes)
-backend/chains/rag_router.py        (classify: rag vs chat)
+backend/chains/rag_router.py        (classify: rag vs db vs chat)
 backend/api/routes/rag.py           (endpoints)
 frontend/app.py                     (UI — same file as chat)
+```
+
+**If you want to understand the database RAG path, open these files in this order:**
+```
+database/seed_data/employees.csv    (understand the source data)
+rag/database_rag/schema.py          (schema description fed to GPT-4o)
+rag/database_rag/nl_to_sql.py       (question → validated SQL)
+rag/database_rag/executor.py        (SQL → structured QueryResult)
+rag/database_rag/chain.py           (QueryResult + question → answer)
+backend/schemas/rag.py              (DatabaseRAGRequest/Response models)
+backend/chains/rag_router.py        (classify: rag vs db vs chat)
+backend/api/routes/rag.py           (/rag/db/query and /rag/db/stream endpoints)
+frontend/app.py                     (stream_db() generator + SQL expander)
 ```
 
 **If you want to understand the data foundation:**
@@ -871,36 +1276,34 @@ scripts/seed_database.py
 
 ---
 
-## What Changes in Phase 3
+## What Changes in Phase 4
 
-Phase 3 adds a third journey — **Database RAG** — for questions about specific employees, leave balances, and org chart data. The architecture extends cleanly:
+Phase 4 adds **conversational memory across turns** — ARIA will remember context from earlier in a multi-turn conversation and use it to resolve follow-up questions. The three existing journeys stay completely unchanged.
 
-**New files Phase 3 adds:**
+**New files Phase 4 adds:**
 ```
-rag/database_rag/schema.py      (teaches GPT-4o the PostgreSQL schema)
-rag/database_rag/nl_to_sql.py   (question → SQL query)
-rag/database_rag/executor.py    (SQL → structured results)
-rag/database_rag/chain.py       (results → natural language answer)
+rag/memory/session_store.py     (per-session conversation state)
+rag/memory/context_resolver.py  (resolves follow-up questions using prior context)
 ```
 
-**Files that get updated in Phase 3:**
+**Files that get updated in Phase 4:**
 ```
-backend/chains/rag_router.py    (adds "db" as a third classification)
-backend/api/routes/rag.py       (adds /rag/db/query endpoint)
-frontend/app.py                 (adds stream_db() generator)
+backend/chains/rag_router.py    (passes session history to classifier for follow-up detection)
+backend/chains/chat_chain.py    (already has memory — may need cross-journey memory sharing)
+backend/api/routes/rag.py       (passes session context through to DB and document chains)
+frontend/app.py                 (no visible change — routing handles it transparently)
 ```
 
-**Files that stay completely unchanged in Phase 3:**
+**Files that stay completely unchanged in Phase 4:**
 ```
-config/settings.py              (no new config needed)
-backend/schemas/chat.py         (chat contract unchanged)
-backend/chains/chat_chain.py    (chat chain unchanged)
-rag/document_rag/*              (document RAG unchanged)
+rag/database_rag/*              (DB RAG chain unchanged — receives resolved question)
+rag/document_rag/*              (document RAG chain unchanged)
 vector_store/*                  (ChromaDB unchanged)
+database/*                      (PostgreSQL unchanged)
 ```
 
-The patterns established in Phases 1 and 2 — streaming generators, SSE events, dataclass results, chain composition — repeat identically in Phase 3. Reading this document once gives you the mental model to read Phase 3 code immediately.
+The patterns established in Phases 1–3 — streaming generators, SSE events, three-way routing, dataclass results — repeat in Phase 4. Phase 4's new complexity lives entirely in the memory resolution layer, isolated from the existing chains.
 
 ---
 
-*Document version: May 2026 | ARIA v0.2.0 | Phases 0–2*
+*Document version: May 2026 | ARIA v0.3.0 | Phases 0–3*
