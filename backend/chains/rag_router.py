@@ -7,7 +7,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 ROUTER_PROMPT = """You are a query classifier for an HR assistant system.
-Classify the user's question as 'rag', 'db', or 'chat'.
+Classify the user's question as 'agent', 'rag', 'db', or 'chat'.
+
+Return 'agent' if the question REQUIRES BOTH:
+- A policy or document lookup (general rules, entitlements, procedures)
+- AND a specific employee data lookup (named person, leave balance, org structure)
+The question cannot be fully answered without retrieving from BOTH sources.
+Examples:
+  "What is the leave policy and how many days does James have?"
+  "What is the remote work policy and what is Sarah's department?"
+  "Tell me about parental leave and how much does Isabella have?"
 
 Return 'db' if the question:
 - Asks about a SPECIFIC employee by name or employee ID
@@ -37,10 +46,10 @@ Return 'chat' if the question:
 - Is a follow-up that continues a general conversation
 - Cannot be answered from documents OR the employee database
 
-IMPORTANT: If the question mentions a SPECIFIC PERSON by name,
-always return 'db' — never 'rag' or 'chat'.
+IMPORTANT: Classify as 'agent' before 'db' — if the question needs
+BOTH a policy document AND a named employee lookup, always return 'agent'.
 
-Return ONLY the word 'rag', 'db', or 'chat' — nothing else."""
+Return ONLY the word 'agent', 'rag', 'db', or 'chat' — nothing else."""
 
 
 async def classify_query(question: str) -> str:
@@ -52,7 +61,7 @@ async def classify_query(question: str) -> str:
     chain = prompt | llm | StrOutputParser()
     result = await chain.ainvoke({"question": question})
     result = result.strip().lower()
-    if result not in ("rag", "db", "chat"):
+    if result not in ("agent", "rag", "db", "chat"):
         result = "rag"
     logger.info(f"Query classified as '{result}': {question[:50]}")
     return result
