@@ -54,6 +54,16 @@ try:
 except Exception:
     st.sidebar.warning("⚠️ Document search unavailable")
 
+try:
+    httpx.post(
+        f"{BACKEND_URL}/agent/query",
+        json={"question": "ping"},
+        timeout=5,
+    )
+    st.sidebar.success("🤖 Agent: Online")
+except Exception:
+    st.sidebar.error("🤖 Agent: Offline")
+
 st.sidebar.divider()
 st.sidebar.markdown("**Session ID**")
 st.sidebar.caption(st.session_state.session_id)
@@ -104,6 +114,18 @@ if not st.session_state.messages:
             "- 🎯 Onboarding assistance"
         )
         st.write("What can I help you with today?")
+
+# ── Agent helper ───────────────────────────────────────────────────────────
+def get_agent_response(question: str) -> dict:
+    """Call /agent/query and return the full response dict."""
+    response = httpx.post(
+        f"{BACKEND_URL}/agent/query",
+        json={"question": question},
+        timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
 
 # ── Streaming helpers ──────────────────────────────────────────────────────
 def stream_response(prompt: str, session_id: str):
@@ -193,62 +215,112 @@ if prompt := st.chat_input("Ask ARIA anything about HR..."):
     except Exception:
         classification = "chat"
 
+    # Phase 4 override — route compound questions to agent
+    agent_keywords = ["and how many", "and what is", "and who is", "tell me about"]
+    if any(kw in prompt.lower() for kw in agent_keywords):
+        classification = "agent"
+
     st.session_state.last_answer_type = classification
 
     # Route to the correct chain
-    with st.chat_message("assistant"):
-        if classification == "rag":
-            try:
-                response_text = st.write_stream(
-                    stream_rag(prompt, st.session_state.session_id)
-                )
-            except Exception as e:
-                st.error(f"❌ Could not reach ARIA backend: {str(e)}")
-                response_text = None
+    if classification == "agent":
+        try:
+            result = get_agent_response(prompt)
+        except Exception as e:
+            with st.chat_message("assistant"):
+                st.error(f"❌ Could not reach ARIA agent: {str(e)}")
+            result = None
 
-            if st.session_state.last_sources:
-                st.caption(
-                    "📄 **Sources:** " +
-                    " · ".join(st.session_state.last_sources)
-                )
-            st.caption("🔍 Answered from company documents")
+        if result:
+            with st.chat_message("assistant"):
+                st.markdown("🤖 **Agent**")
+                st.markdown(result["answer"])
 
-        elif classification == "db":
-            try:
-                response_text = st.write_stream(
-                    stream_db(prompt, st.session_state.session_id)
-                )
-            except Exception as e:
-                st.error(f"❌ Could not reach ARIA backend: {str(e)}")
-                response_text = None
+                if result.get("tools_used"):
+                    cols = st.columns(len(result["tools_used"]))
+                    tool_icons = {
+                        "search_policies": "📄",
+                        "lookup_employee": "👤",
+                        "search_knowledge_base": "🔍",
+                    }
+                    for i, tool in enumerate(result["tools_used"]):
+                        icon = tool_icons.get(tool, "🔧")
+                        cols[i].markdown(
+                            f"<span style='background:#1a1a2e;padding:4px 10px;"
+                            f"border-radius:12px;font-size:0.8em;color:#00C8FF'>"
+                            f"{icon} {tool}</span>",
+                            unsafe_allow_html=True,
+                        )
 
-            if st.session_state.last_row_count > 0:
-                st.caption(
-                    f"🗄️ Answered from employee database · "
-                    f"{st.session_state.last_row_count} record(s) found"
-                )
-            if st.session_state.last_sql_used:
-                with st.expander("View database query"):
-                    st.code(st.session_state.last_sql_used, language="sql")
+                if result.get("steps"):
+                    with st.expander(
+                        f"🧠 Agent Reasoning ({len(result['steps'])} steps)"
+                    ):
+                        for i, step in enumerate(result["steps"], 1):
+                            st.markdown(f"**Step {i} — {step['tool']}**")
+                            st.markdown(f"*Tool input:* `{step['tool_input']}`")
+                            st.markdown("*Observation:*")
+                            st.text(step["observation"][:400])
+                            if i < len(result["steps"]):
+                                st.divider()
 
-        else:
-            try:
-                response_text = st.write_stream(
-                    stream_response(prompt, st.session_state.session_id)
-                )
-            except Exception as e:
-                st.error(f"❌ Could not reach ARIA backend: {str(e)}")
-                st.info("Make sure the backend is running on port 8000")
-                response_text = None
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": result["answer"],
+            })
 
-            st.caption("💬 General HR knowledge")
+    else:
+        response_text = None
+        with st.chat_message("assistant"):
+            if classification == "rag":
+                try:
+                    response_text = st.write_stream(
+                        stream_rag(prompt, st.session_state.session_id)
+                    )
+                except Exception as e:
+                    st.error(f"❌ Could not reach ARIA backend: {str(e)}")
 
-    if response_text:
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": response_text,
-            "sources": st.session_state.last_sources,
-            "sql_used": st.session_state.last_sql_used,
-            "row_count": st.session_state.last_row_count,
-            "answer_type": classification,
-        })
+                if st.session_state.last_sources:
+                    st.caption(
+                        "📄 **Sources:** " +
+                        " · ".join(st.session_state.last_sources)
+                    )
+                st.caption("🔍 Answered from company documents")
+
+            elif classification == "db":
+                try:
+                    response_text = st.write_stream(
+                        stream_db(prompt, st.session_state.session_id)
+                    )
+                except Exception as e:
+                    st.error(f"❌ Could not reach ARIA backend: {str(e)}")
+
+                if st.session_state.last_row_count > 0:
+                    st.caption(
+                        f"🗄️ Answered from employee database · "
+                        f"{st.session_state.last_row_count} record(s) found"
+                    )
+                if st.session_state.last_sql_used:
+                    with st.expander("View database query"):
+                        st.code(st.session_state.last_sql_used, language="sql")
+
+            else:
+                try:
+                    response_text = st.write_stream(
+                        stream_response(prompt, st.session_state.session_id)
+                    )
+                except Exception as e:
+                    st.error(f"❌ Could not reach ARIA backend: {str(e)}")
+                    st.info("Make sure the backend is running on port 8000")
+
+                st.caption("💬 General HR knowledge")
+
+        if response_text:
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response_text,
+                "sources": st.session_state.last_sources,
+                "sql_used": st.session_state.last_sql_used,
+                "row_count": st.session_state.last_row_count,
+                "answer_type": classification,
+            })

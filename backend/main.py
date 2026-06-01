@@ -7,6 +7,7 @@ import uvicorn
 from config.settings import settings
 from backend.api.routes import chat as chat_router
 from backend.api.routes import rag as rag_router
+from backend.api.routes import agent as agent_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +73,7 @@ def health():
 
 app.include_router(chat_router.router)
 app.include_router(rag_router.router)
+app.include_router(agent_router.router)
 
 
 if __name__ == "__main__":

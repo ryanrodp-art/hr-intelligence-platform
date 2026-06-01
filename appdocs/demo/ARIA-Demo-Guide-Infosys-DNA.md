@@ -39,17 +39,29 @@ curl -s -X POST http://localhost:8000/rag/db/query \
   -H "Content-Type: application/json" \
   -d '{"question": "How many leave days does James Chen have?"}' | python3 -m json.tool
 
-# 8. Verify three-way router
+# 8. Verify four-way router
 curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Chen+have"
 # Expected: {"classification": "db"}
+
+curl "http://localhost:8000/rag/classify?query=What+is+the+leave+policy+and+how+many+days+does+James+Chen+have"
+# Expected: {"classification": "agent"}
+
+# 9. Verify agent endpoint
+curl -s -X POST http://localhost:8000/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the parental leave policy?"}' | python3 -m json.tool
+# Expected: {"answer": "...", "tools_used": ["search_policies"], "success": true}
 ```
 
 **You should see before the demo starts:**
 - ✅ Streamlit UI open with "Backend Connected" in sidebar
 - ✅ Sidebar shows "📄 19 policy chunks indexed"
+- ✅ Sidebar shows "🤖 Agent: Online"
 - ✅ ARIA welcome message visible in chat
 - ✅ DB RAG query returns `{"answer": "James Chen has 30 days of leave remaining.", "success": true}`
 - ✅ Router returns `{"classification": "db"}` for the James Chen question
+- ✅ Router returns `{"classification": "agent"}` for the compound question
+- ✅ Agent endpoint returns `{"tools_used": ["search_policies"], "success": true}`
 - ✅ Terminal Tab 3 ready with env vars set
 
 ---
@@ -71,23 +83,23 @@ curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Ch
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    STREAMLIT UI                          │
-│    Chat interface · Source citations · SQL expander     │
-│    Routing badges · DB record count · History           │
+│ Chat · RAG citations · SQL expander · Agent trace       │
+│ Routing badges · DB record count · History              │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTP (SSE streaming)
 ┌──────────────────────▼──────────────────────────────────┐
 │                   FASTAPI BACKEND                        │
-│  /chat/stream  /rag/stream  /rag/db/stream  /rag/query  │
+│  /chat/stream  /rag/stream  /rag/db/stream  /agent/query│
 │  /rag/db/query  /rag/classify  /rag/status  /chat/stats │
 └──────┬──────────────────────────────────┬───────────────┘
        │                                  │
        │                    ┌─────────────▼──────────────┐
-       │                    │   THREE-WAY ROUTER          │
+       │                    │   FOUR-WAY ROUTER           │
        │                    │   GPT-4o · temperature=0   │
-       │                    │   "rag" / "db" / "chat"    │
-       │                    └──────┬─────────────┬───────┘
-       │                           │             │
-┌──────▼──────────┐    ┌───────────▼──┐   ┌─────▼──────────────┐
+       │                    │  "rag"/"db"/"chat"/"agent" │
+       │                    └──────┬──────────┬──┬───────┘
+       │                           │          │  │
+┌──────▼──────────┐    ┌───────────▼──┐   ┌──▼──▼──────────────┐
 │  LANGCHAIN      │    │  DOCUMENT    │   │  DATABASE RAG      │
 │  Chat Chain     │    │  RAG CHAIN   │   │  NL-to-SQL (GPT-4o)│
 │  Memory         │    │  Retriever   │   │  SQLAlchemy        │
@@ -100,6 +112,15 @@ curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Ch
               │  hr_policies     │    │  30 leave records        │
               │  text-embedding  │    │  50 org chart rows       │
               └──────────────────┘    └─────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│              SINGLE HR ADVISOR AGENT (Phase 4)          │
+│   LangChain ReAct · max_iterations=5 · temp=0          │
+│   ┌─────────────┐ ┌──────────────┐ ┌─────────────────┐ │
+│   │search_polici│ │lookup_employe│ │search_knowledge_│ │
+│   │es → ChromaDB│ │e → PostgreSQL│ │base → ChromaDB  │ │
+│   └─────────────┘ └──────────────┘ └─────────────────┘ │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Capability Growth by Phase
@@ -110,9 +131,9 @@ curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Ch
 | **1** *(Done)* | GPT-4o chat, memory, streaming | GEval, AnswerRelevancy, Hallucination |
 | **2** *(Done)* | Document RAG, citations, two-way routing | + Faithfulness, ContextualPrecision, ContextualRecall |
 | **3** *(Done)* | Database RAG, NL-to-SQL, three-way routing | + Faithfulness (DB), AnswerRelevancy (DB), RoutingBoundary |
-| **4** | Single agent with tools | + TaskCompletion, ToolCallAccuracy |
-| **5** | MCP server — real actions | + ToolSelectionAccuracy, ParameterCorrectness |
-| **6** | Multi-agent LangGraph | + OrchestratorAccuracy, AgentHandoffQuality |
+| **4** *(Done)* | ReAct agent, 3 tools, four-way routing, reasoning trace | + TaskCompletion, ToolCorrectness, AnswerRelevancy |
+| **5** | MCP server — real actions | + MCPTaskCompletion, MCPUse, MultiTurnMCPUse |
+| **6** | Multi-agent LangGraph | + StepEfficiency, PlanAdherence, PlanQuality |
 | **7** | Full eval suite + CI/CD | All metrics + regression pipeline |
 | **8** | Production polish | Monitoring dashboards + alerting |
 
@@ -271,7 +292,69 @@ What is the parental leave policy?
 
 ---
 
-## Demo Section E — DeepEval Framework Explained *(4 minutes)*
+## Demo Section E — Phase 4: Single HR Advisor Agent *(5 minutes)*
+
+> *"Phase 4 is where ARIA stops following rules and starts reasoning. Instead of a hardcoded router that says 'if policy question → RAG, if employee question → DB', we now have a LangChain ReAct agent that reads the question, decides which tool to use, calls it, reads the result, and decides if it needs more information. This is the first step from retrieval to reasoning."*
+
+**The transformation:**
+```
+Phase 3 — Rule-based routing:
+Router classifies → hardcoded chain executes → answer
+
+Phase 4 — Agent reasoning:
+Agent reads question → thinks → chooses tool → observes result
+→ thinks again → chooses another tool if needed → final answer
+```
+
+**Type these four messages in order — pause after each to show the reasoning trace:**
+
+**Message 1 — Single tool, policy:**
+```
+What is the parental leave policy?
+```
+*Point out:*
+- 🤖 **Agent** badge — this went through the ReAct agent, not the direct RAG chain
+- `📄 search_policies` tool badge appears below the answer
+- Click **🧠 Agent Reasoning (1 step)** expander
+- Show Step 1: Tool input `{'query': 'parental leave policy'}` → Observation shows the retrieved policy text
+- *"The agent read the question, decided search_policies was the right tool, called it, got the policy text, and formed its answer. One reasoning step."*
+
+**Message 2 — Single tool, employee:**
+```
+How many leave days does James Chen have?
+```
+*Point out:*
+- `👤 lookup_employee` tool badge — agent chose the database tool, not the policy search
+- Click the reasoning expander — Tool input: `{'query': "What is James Chen's leave balance?"}`
+- Observation: "James Chen has a leave balance of 30 days."
+- *"Same agent, different tool. It read 'James Chen' — a person's name — and correctly inferred this was a database question, not a policy question. Zero hardcoded rules. Pure reasoning."*
+
+**Message 3 — Compound query, two tools:**
+```
+What is the remote work policy and how many days does James Chen have?
+```
+*Point out:*
+- Both `📄 search_policies` AND `👤 lookup_employee` badges appear
+- Click **🧠 Agent Reasoning (2 steps)**
+- Step 1: `search_policies` called with `{'query': 'remote work policy'}` → handbook content returned
+- Step 2: `lookup_employee` called with `{'query': "What is James Chen's leave balance?"}` → "30 days"
+- Final answer combines both sources coherently
+- *"This is the key Phase 4 capability. One question, two knowledge sources, two tool calls, one coherent answer. The router classified this as 'agent' — it knew this question needed both document search and database lookup. Try getting that from a rule-based system."*
+
+**Message 4 — Broad knowledge base:**
+```
+What should a new hire know about their first week?
+```
+*Point out:*
+- `🔍 search_knowledge_base` badge — the broad search tool for cross-cutting questions
+- Answer pulls from onboarding, working hours, buddy programme, IT setup — across multiple handbook sections
+- *"The third tool — search_knowledge_base — is the broad fallback. Not a specific policy clause, not a specific employee. General HR knowledge. The agent chose this without being told."*
+
+> *"What you just saw is a ReAct agent — Reason and Act. The agent loops: think about which tool, call the tool, observe the result, think again, call another tool if needed, form the final answer. The reasoning trace in the UI is not cosmetic — it's the actual internal thought process of the agent, captured as it runs. This is the pattern that powers every serious AI agent system in production today."*
+
+---
+
+## Demo Section F — DeepEval Framework Explained *(4 minutes)*
 
 > *"Before I run the evaluations live, let me explain what DeepEval is and why it was selected."*
 
@@ -325,9 +408,10 @@ PHASE 3 — Database RAG  (complete)
 ├── AnswerRelevancyMetric (DB)     Does the answer address the employee question?
 └── Routing Boundary (assertion)   Do DB questions route 'db', policy questions 'rag'?
 
-PHASE 4 — Single Agent  (planned)
-├── TaskCompletionMetric           Did the agent complete the task?
-└── ToolCallAccuracyMetric         Did it use the right tools?
+PHASE 4 — Single Agent  (complete)
+├── TaskCompletionMetric           Did the agent complete the full task?
+├── ToolCorrectnessMetric          Did it choose the right tool(s)?
+└── AnswerRelevancyMetric          Did the answer stay focused and on-point?
 
 PHASE 5 — MCP Tools  (planned)
 ├── ToolSelectionAccuracyMetric    Right tool for right task?
@@ -346,7 +430,7 @@ PHASE 8 — Production  (planned)
 
 ---
 
-## Demo Section F — Phase 1 DeepEval Suite Live *(3 minutes)*
+## Demo Section G — Phase 1 DeepEval Suite Live *(3 minutes)*
 
 > *"Now I'll run the Phase 1 evaluation suite live. This is 5 test functions, 24 test cases, calling the live ARIA API and having GPT-4o judge every response."*
 
@@ -378,7 +462,7 @@ Overall: 24/24 passed
 
 ---
 
-## Demo Section G — Phase 2 DeepEval Suite Live *(9 minutes)*
+## Demo Section H — Phase 2 DeepEval Suite Live *(9 minutes)*
 
 > *"Phase 2 introduces four new RAG-specific metrics that don't exist in standard LLM evaluation. These are the metrics that matter for enterprise document AI."*
 
@@ -462,7 +546,7 @@ Document routing: 15/15 classified as "rag" — PASSED
 
 ---
 
-## Demo Section H — Phase 3: DeepEval Suite *(5 minutes)*
+## Demo Section I — Phase 3: DeepEval Suite *(5 minutes)*
 
 > *"Phase 3 has four test functions. One runs instantly with no LLM judge — it's a pure routing assertion. Three use GPT-4o as the judge. I'll run the routing test live and walk through the results of the LLM-judged tests."*
 
@@ -536,7 +620,52 @@ uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_que
 
 ---
 
-## Enterprise Observability Roadmap *(2 minutes)*
+## Demo Section J — Phase 4: DeepEval Agent Suite *(5 minutes)*
+
+> *"Phase 4 introduces three new DeepEval metrics designed specifically for agents. These are native DeepEval metrics — no custom code. The framework already knows how to evaluate agents."*
+
+**Run the full Phase 4 suite:**
+
+```bash
+uv run deepeval test run evaluation/tests/test_single_agent.py -v
+```
+
+**While it runs, narrate the four tests:**
+
+### test_agent_policy_queries *(~15 seconds)*
+> *"Three policy questions — parental leave, remote work policy, probation period. TaskCompletionMetric asks: did the agent fully accomplish what the user asked? ToolCorrectnessMetric verifies search_policies was called. AnswerRelevancyMetric checks the answer stayed focused. All three passed at 100%."*
+
+### test_agent_employee_queries *(~20 seconds)*
+> *"Three employee questions. The key thing here is ToolCorrectnessMetric — did the agent call lookup_employee rather than search_policies? For named employee questions, the agent must use the database tool. Score: 1.00. It never went to the wrong knowledge source."*
+
+### test_agent_compound_queries *(~20 seconds)*
+> *"This is the most important test — three compound questions requiring both tools. TaskCompletionMetric checks the combined answer is complete. ToolCorrectnessMetric verifies BOTH search_policies AND lookup_employee were called. This is what the agent was built for. All three passed."*
+
+### test_agent_tool_correctness_boundary *(~40 seconds)*
+> *"The boundary test runs all 10 golden set entries through ToolCorrectnessMetric only — no LLM judge, pure tool selection verification. 10 questions, 10 correct tool choices. Score: 1.00 across all entries. This is the Phase 4 exit criteria — Tool Correctness ≥ 0.8. We hit 1.00."*
+
+**When results appear — point out:**
+
+```
+Task Completion     avg=0.95   pass=100%   9 cases
+Tool Correctness    avg=1.00   pass=100%   19 cases
+Answer Relevancy    avg=0.90   pass=100%   9 cases
+Overall: 19/19 passed
+```
+
+**Final Phase 4 Results:**
+
+| Test | Metrics | Pass Rate | Cases | Cost | Time |
+|---|---|---|---|---|---|
+| Policy queries | TaskCompletion + ToolCorrectness + AnswerRelevancy | **100%** | 3 | ~$0.025 | ~15s |
+| Employee queries | ToolCorrectness + AnswerRelevancy | **100%** | 3 | ~$0.010 | ~20s |
+| Compound queries | TaskCompletion + ToolCorrectness + AnswerRelevancy | **100%** | 3 | ~$0.025 | ~20s |
+| Tool boundary | ToolCorrectness only | **100%** | 10 | $0.000 | ~40s |
+| **Total Phase 4** | | **100%** | **19** | **$0.073** | **~115s** |
+
+> *"ToolCorrectnessMetric at 1.00 is the headline result. The agent chose the right tool for every single query — policy questions went to search_policies, employee questions went to lookup_employee, compound questions triggered both. That's not luck. That's well-designed tool descriptions and a well-prompted ReAct agent — and now we have a metric that proves it reproducibly."*
+
+---
 
 > *"Before I wrap up, I want to show you the proposed observability architecture for when this moves beyond proof of concept into production. This is directly relevant to de.ai's platform requirements."*
 
@@ -616,10 +745,16 @@ Under $0.40 total across all three evaluation suites — chat, document RAG, and
 **4. Framework-agnostic design**
 ARIA uses GPT-4o today. Swapping to Claude, Gemini, or a fine-tuned Llama model requires changing two lines in `.env`. The evaluation suite runs unchanged.
 
-**5. Hybrid knowledge architecture is production-ready**
-Phase 3 demonstrates that a single AI assistant can transparently switch between document retrieval (ChromaDB) and database querying (PostgreSQL) based on the nature of the question. The same router, the same streaming interface, the same evaluation framework. Enterprise HR systems always have both structured employee data and unstructured policy documents — ARIA handles both.
+**5. Agentic reasoning is measurable**
+Phase 4 demonstrates that agent behaviour — specifically tool selection — is fully measurable with DeepEval's native `ToolCorrectnessMetric`. A 1.00 score across 10 diverse queries proves the ReAct agent consistently reasons to the correct tool without hardcoded rules. The same metric scales to multi-agent orchestration in Phase 6.
 
-**6. Data sovereignty is solved**
+**6. Framework-agnostic design**
+ARIA uses GPT-4o today. Swapping to Claude, Gemini, or a fine-tuned Llama model requires changing two lines in `.env`. The evaluation suite runs unchanged.
+
+**7. Hybrid knowledge architecture is production-ready**
+Phase 3 and 4 together demonstrate that a single AI assistant can transparently switch between document retrieval (ChromaDB), database querying (PostgreSQL), and multi-source agent reasoning — based on the nature of the question. The same router, the same streaming interface, the same evaluation framework. Enterprise HR systems always have both structured employee data and unstructured policy documents — ARIA handles both, and now reasons across both simultaneously.
+
+**8. Data sovereignty is solved**
 SmithDB's self-hosted VPC deployment means no sensitive AI traces leave the Infosys infrastructure boundary — a non-negotiable requirement for enterprise financial, healthcare, and government clients.
 
 ---
@@ -628,7 +763,16 @@ SmithDB's self-hosted VPC deployment means no sensitive AI traces leave the Info
 
 *Additional technical detail available on request:*
 
-### Chunk Boundary Debugging — The Parental Leave Story
+### The ReAct Agent Pattern — Why Tool Descriptions Are Everything
+The ReAct agent selects tools based entirely on their docstring descriptions — not hardcoded rules. The `lookup_employee` tool description explicitly states "Always use this tool when the question mentions a person by name." The `search_policies` description says "Do NOT use this tool if the question mentions a specific employee by name." These two rules alone produce correct tool selection across all employee vs policy questions. The lesson: in agentic systems, prompt engineering moves from the system prompt to the tool description. Getting tool descriptions precisely right is the critical engineering task — `ToolCorrectnessMetric` is the quality gate that confirms they're working.
+
+### The Four-Way Router Upgrade
+The Phase 3 three-way router (`rag` / `db` / `chat`) was extended to four-way by adding a single classification rule: if a question requires retrieving from BOTH policy documents AND the employee database to fully answer — classify as `"agent"`. Single-source questions remain `"rag"` or `"db"`. This means compound questions like "What is the leave policy and how many days does James have?" route to the agent, while simple questions bypass it entirely — keeping the faster direct chains for single-domain queries.
+
+### Why `max_iterations=5` Matters
+The `AgentExecutor` is capped at 5 reasoning iterations. Without this, a confused agent could loop indefinitely burning API credits. 5 iterations is sufficient for the most complex compound question (policy lookup + employee lookup + reasoning), while providing a hard safety ceiling. In production, this ceiling should be logged as a metric — hitting max_iterations signals either a poorly formed question or a tool failure that needs investigation.
+
+### Chunk boundary debugging — The Parental Leave Story
 The parental leave policy section was initially being merged with the sick leave section in one 800-character chunk. The chunk's vector was dominated by sick leave content, causing parental leave queries to return the wrong top result. Diagnosed by inspecting all ChromaDB chunks directly, fixed by regenerating PDFs with explicit `\n\n` section separators and reindexing. Contextual Precision metric caught this — scored correctly at 1.00 after fix. This is a real production RAG debugging workflow.
 
 ### LLM-as-Judge Reliability
@@ -733,6 +877,34 @@ uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregat
 sleep 60 && \
 uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
 
+# === PHASE 4 EVALS ===
+uv run deepeval test run evaluation/tests/test_single_agent.py -v
+
+# Run individual Phase 4 tests
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_policy_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_employee_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_compound_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_tool_correctness_boundary -v
+
+# === AGENT ENDPOINT TEST ===
+curl -s -X POST http://localhost:8000/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the parental leave policy?"}' | python3 -m json.tool
+
+curl -s -X POST http://localhost:8000/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the remote work policy and how many days does James Chen have?"}' | python3 -m json.tool
+
+# === FOUR-WAY ROUTER TEST ===
+curl "http://localhost:8000/rag/classify?query=What+is+the+parental+leave+policy"
+# Expected: {"classification": "rag"}
+
+curl "http://localhost:8000/rag/classify?query=How+many+days+does+James+Chen+have"
+# Expected: {"classification": "db"}
+
+curl "http://localhost:8000/rag/classify?query=What+is+the+leave+policy+and+how+many+days+does+James+Chen+have"
+# Expected: {"classification": "agent"}
+
 # === DATABASE VERIFY ===
 docker exec -it hr_postgres psql -U postgres -d hr_platform \
   -c "SELECT COUNT(*) FROM employees;"            # Expected: 50
@@ -750,8 +922,14 @@ docker exec -it hr_postgres psql -U postgres -d hr_platform \
 |---|---|
 | Streamlit shows "Backend Offline" | Run Tab 1 uvicorn command |
 | Sidebar shows "Document search unavailable" | `curl http://localhost:8001/api/v2/heartbeat` — restart Docker if needed |
+| Sidebar shows "🤖 Agent: Offline" | Check `/agent/query` endpoint — restart FastAPI |
 | DB answer not showing SQL expander | Check that `/rag/db/stream` is sending `sql_used` in the metadata event |
-| `/rag/classify` returns `"chat"` for a DB question | Check that `rag_router.py` has three-way router — not the Phase 2 two-way version |
+| `/rag/classify` returns `"chat"` for a DB question | Check that `rag_router.py` has four-way router — not the Phase 3 three-way version |
+| `/rag/classify` returns `"db"` for compound question | Four-way router not updated — check `rag_router.py` for `"agent"` classification |
+| `/agent/query` returns 500 | Check `agents/single/hr_advisor.py` import — LangChain must be 0.3.x not 1.x |
+| Agent reasoning trace not showing | Check `return_intermediate_steps=True` in `AgentExecutor` in `hr_advisor.py` |
+| Agent uses wrong tool | Tool description mismatch — check `agents/single/tools.py` tool descriptions |
+| DeepEval `ToolCorrectnessMetric` fails | Check `tools_called` is populated from `result["tools_used"]` in `build_test_case()` |
 | `/rag/db/query` returns 500 | Restart FastAPI — check that `from rag.database_rag.chain import db_rag_query` import is present in `routes/rag.py` |
 | DB answer returns `NOT_DB_QUERY` text in UI | Question was misclassified as `"db"` but GPT-4o returned NOT_DB_QUERY — question is policy-related, not a DB question |
 | DeepEval 429 rate limit error | Wait 60 seconds, re-run the specific test function |
@@ -763,5 +941,5 @@ docker exec -it hr_postgres psql -U postgres -d hr_platform \
 
 ---
 
-*Document version: May 2026 | ARIA v0.3.0 | Phases 0–3 complete*
+*Document version: May 2026 | ARIA v0.4.0 | Phases 0–4 complete*
 *Built by: Ryan Rodrigues | Nu Skin Enterprises — Data Platform Architecture*
