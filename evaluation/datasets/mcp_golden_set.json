@@ -1,1 +1,62 @@
-[]
+[
+  {
+    "input": "Check the leave balance for EMP-0001",
+    "expected_output": "James Chen has 30 days of leave remaining.",
+    "query_type": "read",
+    "expected_mcp_tool": "check_leave_balance"
+  },
+  {
+    "input": "What is the leave balance for EMP-0022?",
+    "expected_output": "Isabella Fernandez has 8 days of leave remaining.",
+    "query_type": "read",
+    "expected_mcp_tool": "check_leave_balance"
+  },
+  {
+    "input": "What is James Chen's position and who reports to him? Use employee ID EMP-0001",
+    "expected_output": "James Chen is VP of Engineering at the top level with 2 direct reports: Marcus Johnson and Priya Sharma, both Directors of Engineering.",
+    "query_type": "read",
+    "expected_mcp_tool": "get_org_chart"
+  },
+  {
+    "input": "Who are the direct reports of EMP-0001?",
+    "expected_output": "EMP-0001 James Chen has 2 direct reports: Marcus Johnson and Priya Sharma.",
+    "query_type": "read",
+    "expected_mcp_tool": "get_org_chart"
+  },
+  {
+    "input": "Submit Annual leave for EMP-0001 from 2027-01-02 to 2027-01-03",
+    "expected_output": "Leave request submitted for EMP-0001. Dates 2027-01-02 to 2027-01-03. Status: Pending.",
+    "query_type": "write",
+    "expected_mcp_tool": "submit_leave_request"
+  },
+  {
+    "input": "Book Sick leave for EMP-0022 from 2027-01-10 to 2027-01-10",
+    "expected_output": "Leave request submitted for EMP-0022. Type Sick, 1 day. Status: Pending.",
+    "query_type": "write",
+    "expected_mcp_tool": "submit_leave_request"
+  },
+  {
+    "input": "Request Emergency leave for EMP-0001 on 2027-02-14",
+    "expected_output": "Emergency leave submitted for EMP-0001 on 2027-02-14. Status: Pending.",
+    "query_type": "write",
+    "expected_mcp_tool": "submit_leave_request"
+  },
+  {
+    "input": "Check leave balance for EMP-0001 and look up the parental leave policy",
+    "expected_output": "James Chen has 30 days remaining. Parental leave: 16 weeks primary caregiver, 4 weeks secondary caregiver.",
+    "query_type": "multi_step",
+    "expected_mcp_tool": "check_leave_balance"
+  },
+  {
+    "input": "Get the org chart for EMP-0001 and check their leave balance",
+    "expected_output": "James Chen is VP of Engineering, top level. Leave balance: 30 days remaining.",
+    "query_type": "multi_step",
+    "expected_mcp_tool": "get_org_chart"
+  },
+  {
+    "input": "Submit Annual leave for EMP-0001 from 2027-03-01 to 2027-03-03 and confirm their remaining balance",
+    "expected_output": "Leave submitted 2027-03-01 to 2027-03-03, Status Pending. James Chen has 30 days remaining.",
+    "query_type": "multi_step",
+    "expected_mcp_tool": "submit_leave_request"
+  }
+]
