@@ -387,6 +387,93 @@ What should a new hire know about their first week?
 
 ---
 
+## Demo Section K — Phase 5: MCP Server — From Answers to Actions *(6 minutes)*
+
+> *"Phase 4 ARIA could tell you things. Phase 5 ARIA can do things. This is the most important capability jump in the platform — and it's built on MCP, Anthropic's open standard for connecting AI agents to external tools.*
+>
+> *The difference: Phase 4 tools were baked directly into the agent's code. Phase 5 tools run as a separate server on port 8002. Any MCP-compatible client — Claude Desktop, Cursor, another agent — can call these same tools without touching ARIA's code. That's what makes MCP an enterprise-grade standard, not just a demo trick."*
+
+**Show the MCP server running in Terminal Tab 4:**
+```
+ARIA HR MCP Server
+Transport: HTTP | Port: 8002
+Endpoint: http://localhost:8002/mcp
+Tools: check_leave_balance, submit_leave_request, get_org_chart, policy_lookup
+```
+
+**Explain the tool architecture shift:**
+```
+Phase 4 — 3 tools, baked into the agent:
+  search_policies → ChromaDB (read)
+  lookup_employee → PostgreSQL (read)
+  search_knowledge_base → ChromaDB (read)
+
+Phase 5 — adds 4 MCP tools via network service:
+  check_leave_balance → PostgreSQL (read)
+  submit_leave_request → PostgreSQL (WRITE) ← first write in ARIA
+  get_org_chart → PostgreSQL (read, self-join)
+  policy_lookup → ChromaDB (read)
+
+Total: 7 tools. 3 direct calls. 4 MCP network calls.
+```
+
+**Type these queries in the Streamlit UI — pause after each:**
+
+> **Important:** The MCP queries use **Employee IDs** (EMP-XXXX format), not names. This is intentional — the MCP tools are designed for structured, programmatic inputs. The Phase 4 direct tools handle natural name-based lookups. The agent routes correctly based on the question format.
+
+**Message 1 — MCP read tool, leave balance:**
+```
+Check the leave balance for EMP-0001
+```
+*Point out:*
+- Answer: "James Chen has 30 days of leave remaining. Status: Active"
+- Tools used: `check_leave_balance` — from the MCP server, not the direct Phase 4 tools
+- *"Same data as before, but now accessed through a network protocol rather than a direct function call. EMP-ID format → MCP tool. Name format → Phase 4 direct tool. The agent decides based on tool descriptions."*
+
+**Message 2 — MCP read tool, org chart:**
+```
+Who are the direct reports of EMP-0001?
+```
+*Point out:*
+- Answer: James Chen's position + Marcus Johnson and Priya Sharma as direct reports
+- Tools used: `get_org_chart` — a self-join across three tables in one MCP call
+- *"One MCP tool call ran two SQL queries — employee info plus direct reports — in a single atomic connection. That's the power of encapsulating business logic in a tool."*
+
+**Message 3 — MCP write tool — the milestone moment:**
+```
+Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18
+```
+*Point out:*
+- Answer: "Leave request submitted successfully for EMP-0001. Dates: 2027-06-16 to 2027-06-18 (3 days). Type: Annual. Status: Pending. Your manager will be notified for approval."
+- Tools used: `submit_leave_request`
+- *"This is the first time in this entire demo that ARIA wrote to the database. Not retrieved, not answered — acted. A user's natural language instruction just created a new record in PostgreSQL."*
+
+**Verify the write in the terminal — show the audience:**
+```bash
+docker exec -it hr_postgres psql -U hr_user -d hr_platform \
+  -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' ORDER BY id DESC LIMIT 3;"
+```
+```
+ employee_id | start_date |  end_date  | leave_type | status
+-------------+------------+------------+------------+---------
+ EMP-0001    | 2027-06-16 | 2027-06-18 | Annual     | Pending
+(1 row)
+```
+*"There it is. Row in the database. Status: Pending. Manager gets notified. This is what enterprise AI agents need to do — not just answer questions, but complete workflows."*
+
+**Message 4 — Compound MCP + direct tool:**
+```
+Check leave balance for EMP-0001 and look up the parental leave policy
+```
+*Point out:*
+- Answer combines MCP balance data + ChromaDB policy text in one response
+- Tools used: `check_leave_balance` (MCP) + `search_policies` (Phase 4 direct)
+- *"The agent called tools from two completely different sources — a network MCP tool and a direct Python function — and combined the results into one coherent answer. This is the 7-tool agent working as designed."*
+
+> *"What you just saw is the transition from a Q&A system to an enterprise AI agent. Phase 4 ARIA was a very good assistant. Phase 5 ARIA can complete HR workflows. The same evaluation framework, the same DeepEval metrics, the same golden set discipline — applied to a system that now modifies database state on behalf of users."*
+
+---
+
 ## Demo Section F — DeepEval Framework Explained *(4 minutes)*
 
 > *"Before I run the evaluations live, let me explain what DeepEval is and why it was selected."*
@@ -446,9 +533,10 @@ PHASE 4 — Single Agent  (complete)
 ├── ToolCorrectnessMetric          Did it choose the right tool(s)?
 └── AnswerRelevancyMetric          Did the answer stay focused and on-point?
 
-PHASE 5 — MCP Tools  (planned)
-├── ToolSelectionAccuracyMetric    Right tool for right task?
-└── ParameterCorrectnessMetric     Correct parameters passed?
+PHASE 5 — MCP Tools  (complete)
+├── TaskCompletionMetric (MCP)     Did the MCP action complete successfully?
+├── AnswerRelevancyMetric (MCP)    Is the action response focused and accurate?
+└── Tool Routing (assertion)       Did each question invoke the correct MCP tool?
 
 PHASE 6 — Multi-Agent LangGraph  (planned)
 ├── OrchestratorAccuracyMetric     Correct routing to specialist agents?
@@ -697,93 +785,6 @@ Overall: 19/19 passed
 | **Total Phase 4** | | **100%** | **19** | **$0.073** | **~115s** |
 
 > *"ToolCorrectnessMetric at 1.00 is the headline result. The agent chose the right tool for every single query — policy questions went to search_policies, employee questions went to lookup_employee, compound questions triggered both. That's not luck. That's well-designed tool descriptions and a well-prompted ReAct agent — and now we have a metric that proves it reproducibly."*
-
----
-
-## Demo Section K — Phase 5: MCP Server — From Answers to Actions *(6 minutes)*
-
-> *"Phase 4 ARIA could tell you things. Phase 5 ARIA can do things. This is the most important capability jump in the platform — and it's built on MCP, Anthropic's open standard for connecting AI agents to external tools.*
->
-> *The difference: Phase 4 tools were baked directly into the agent's code. Phase 5 tools run as a separate server on port 8002. Any MCP-compatible client — Claude Desktop, Cursor, another agent — can call these same tools without touching ARIA's code. That's what makes MCP an enterprise-grade standard, not just a demo trick."*
-
-**Show the MCP server running in Terminal Tab 4:**
-```
-ARIA HR MCP Server
-Transport: HTTP | Port: 8002
-Endpoint: http://localhost:8002/mcp
-Tools: check_leave_balance, submit_leave_request, get_org_chart, policy_lookup
-```
-
-**Explain the tool architecture shift:**
-```
-Phase 4 — 3 tools, baked into the agent:
-  search_policies → ChromaDB (read)
-  lookup_employee → PostgreSQL (read)
-  search_knowledge_base → ChromaDB (read)
-
-Phase 5 — adds 4 MCP tools via network service:
-  check_leave_balance → PostgreSQL (read)
-  submit_leave_request → PostgreSQL (WRITE) ← first write in ARIA
-  get_org_chart → PostgreSQL (read, self-join)
-  policy_lookup → ChromaDB (read)
-
-Total: 7 tools. 3 direct calls. 4 MCP network calls.
-```
-
-**Type these queries in the Streamlit UI — pause after each:**
-
-> **Important:** The MCP queries use **Employee IDs** (EMP-XXXX format), not names. This is intentional — the MCP tools are designed for structured, programmatic inputs. The Phase 4 direct tools handle natural name-based lookups. The agent routes correctly based on the question format.
-
-**Message 1 — MCP read tool, leave balance:**
-```
-Check the leave balance for EMP-0001
-```
-*Point out:*
-- Answer: "James Chen has 30 days of leave remaining. Status: Active"
-- Tools used: `check_leave_balance` — this came from the MCP server, not the direct Phase 4 tools
-- *"Same data as before, but now accessed through a network protocol rather than a direct function call. EMP-ID format → MCP tool. Name format → Phase 4 direct tool. The agent decides based on tool descriptions."*
-
-**Message 2 — MCP read tool, org chart:**
-```
-Who are the direct reports of EMP-0001?
-```
-*Point out:*
-- Answer: James Chen's position + Marcus Johnson and Priya Sharma as direct reports
-- Tools used: `get_org_chart` — a self-join across three tables in one MCP call
-- *"One MCP tool call ran two SQL queries — employee info plus direct reports — in a single atomic connection. That's the power of encapsulating business logic in a tool."*
-
-**Message 3 — MCP write tool — the milestone moment:**
-```
-Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18
-```
-*Point out:*
-- Answer: "Leave request submitted successfully for EMP-0001. Dates: 2027-06-16 to 2027-06-18 (3 days). Type: Annual. Status: Pending. Your manager will be notified for approval."
-- Tools used: `submit_leave_request`
-- *"This is the first time in this entire demo that ARIA wrote to the database. Not retrieved, not answered — acted. A user's natural language instruction just created a new record in PostgreSQL."*
-
-**Verify the write in the terminal — show the audience:**
-```bash
-docker exec -it hr_postgres psql -U hr_user -d hr_platform \
-  -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' ORDER BY id DESC LIMIT 3;"
-```
-```
- employee_id | start_date |  end_date  | leave_type | status
--------------+------------+------------+------------+---------
- EMP-0001    | 2027-06-16 | 2027-06-18 | Annual     | Pending
-(1 row)
-```
-*"There it is. Row in the database. Status: Pending. Manager gets notified. This is what enterprise AI agents need to do — not just answer questions, but complete workflows."*
-
-**Message 4 — Compound MCP + direct tool:**
-```
-Check leave balance for EMP-0001 and look up the parental leave policy
-```
-*Point out:*
-- Answer combines MCP balance data + ChromaDB policy text in one response
-- Tools used: `check_leave_balance` (MCP) + `search_policies` (Phase 4 direct)
-- *"The agent called tools from two completely different sources — a network MCP tool and a direct Python function — and combined the results into one coherent answer. This is the 7-tool agent working as designed."*
-
-> *"What you just saw is the transition from a Q&A system to an enterprise AI agent. Phase 4 ARIA was a very good assistant. Phase 5 ARIA can complete HR workflows. The same evaluation framework, the same DeepEval metrics, the same golden set discipline — applied to a system that now modifies database state on behalf of users."*
 
 ---
 
