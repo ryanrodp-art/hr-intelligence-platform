@@ -1,14 +1,14 @@
 # ARIA — HR GenAI Agent Platform
 ## Phase 5 Build Guide — MCP Server
 
-> FastMCP tool server, 4 HR action tools, first database write via AI agent, and agent upgraded from 3 to 7 tools.
-> **Completed in 1 day | 7 Steps | 19 DeepEval cases | 100% pass rate | $0.080 total cost**
+> FastMCP tool server, 5 HR action tools, first database write and delete via AI agent, and agent upgraded from 3 to 8 tools.
+> **Completed in 1 day | 10 Steps | 19 DeepEval cases | 100% pass rate | $0.080 total cost**
 
 ---
 
 ## Phase 5 Overview
 
-Phase 5 gives ARIA the ability to **act**, not just answer. The Phase 4 ReAct agent could retrieve information — leave balances, policies, org charts. Phase 5 adds a FastMCP server that exposes 4 HR tools, including the first write operation in the entire ARIA platform: `submit_leave_request` inserts a new `LeaveRecord` row into PostgreSQL.
+Phase 5 gives ARIA the ability to **act**, not just answer. The Phase 4 ReAct agent could retrieve information — leave balances, policies, org charts. Phase 5 adds a FastMCP server that exposes 5 HR tools, including the first write operation in the entire ARIA platform: `submit_leave_request` inserts a new `LeaveRecord` row into PostgreSQL, and `cancel_leave_request` deletes one.
 
 **The transformation:**
 
@@ -25,6 +25,12 @@ ARIA: "Leave request submitted successfully for EMP-0001.
        Type: Annual. Status: Pending.
        Your manager will be notified for approval."
       (WRITES to database, confirms action)
+
+User: "Cancel the Annual leave for EMP-0001 on Dec 28"
+ARIA: "Leave request cancelled successfully for EMP-0001.
+       Annual leave from 2026-12-28 to 2026-12-30 has been removed.
+       Status was: Pending."
+      (DELETES from database, confirms action)
 ```
 
 **Why MCP specifically:**
@@ -33,13 +39,14 @@ MCP (Model Context Protocol) is Anthropic's open standard for connecting AI agen
 **The complete agent tool set after Phase 5:**
 
 ```
-ReAct Agent — 7 tools total:
+ReAct Agent — 8 tools total:
 ├── search_policies          (Phase 4 — direct Python call, read-only)
 ├── lookup_employee          (Phase 4 — direct Python call, read-only)
 ├── search_knowledge_base    (Phase 4 — direct Python call, read-only)
 └── MCP tools via port 8002: (Phase 5 — HTTP network service)
     ├── check_leave_balance       (read — PostgreSQL)
-    ├── submit_leave_request      (WRITE — only write op in ARIA)
+    ├── submit_leave_request      (WRITE — first write op in ARIA)
+    ├── cancel_leave_request      (DELETE — removes pending leave records)
     ├── get_org_chart             (read — PostgreSQL self-join)
     └── policy_lookup             (read — ChromaDB)
 ```
@@ -47,26 +54,34 @@ ReAct Agent — 7 tools total:
 **What Phase 5 Delivers:**
 
 - FastMCP 3.3.1 server on port 8002 with HTTP transport
-- 4 MCP tools — 3 read, 1 write — registered and verified
+- 5 MCP tools — 3 read, 2 write/delete — registered and verified
 - First write operation: `submit_leave_request` → PostgreSQL `leave_records` table
+- First delete operation: `cancel_leave_request` → removes pending `leave_records` rows
+- Duplicate guard in `submit_leave_request` — prevents double-booking same start date
 - `langchain-mcp-adapters 0.2.2` integration via `MultiServerMCPClient`
-- Agent upgraded from 3 direct tools to 7 tools (3 direct + 4 MCP)
+- Agent upgraded from 3 direct tools to 8 tools (3 direct + 5 MCP)
 - LangChain 1.3.1 + LangGraph 1.2.0 migration applied to `hr_advisor.py`
+- Backend `/mcp/query` FastAPI endpoint wired into `main.py`
+- Router updated with 5th classification `"mcp"` for EMP-ID and action queries
+- Frontend MCP branch with confirmation banner, tool badges, and reasoning trace
 - Tool routing verified: EMP-ID queries → MCP tools, name-based → direct tools
 - Compound queries span both tool types in a single reasoning loop
 - DeepEval: 4 tests, 19 cases, 100% pass rate, $0.080 total cost
 
-**7 Steps:**
+**10 Steps:**
 
 | # | Step | File(s) Created / Updated | Delivers |
 |---|---|---|---|
 | 1 | MCP Server + Package Files | `mcp_server/__init__.py`, `mcp_server/tools/__init__.py`, `mcp_server/server.py` | FastMCP server entry point on port 8002 |
-| 2 | Leave Tool | `mcp_server/tools/leave_tool.py` | `check_leave_balance`, `submit_leave_request` |
+| 2 | Leave Tool | `mcp_server/tools/leave_tool.py` | `check_leave_balance`, `submit_leave_request`, `cancel_leave_request` |
 | 3 | Org Chart Tool | `mcp_server/tools/org_chart_tool.py` | `get_org_chart` |
 | 4 | Policy Lookup Tool | `mcp_server/tools/policy_lookup_tool.py` | `policy_lookup` |
 | 5 | MCP Start Script | `scripts/start_mcp_server.py` | CLI runner + full server verification |
-| 6 | Agent MCP Integration | `agents/single/hr_advisor.py` updated | 7-tool agent, LangChain 1.3.1 migration |
-| 7 | DeepEval MCP Tests | `evaluation/tests/test_mcp.py` + golden set | 4 tests, 19 cases, 100% pass |
+| 6 | Agent MCP Integration | `agents/single/hr_advisor.py` updated | 8-tool agent, LangChain 1.3.1 migration |
+| 7 | Backend API Route | `backend/api/routes/mcp_agent.py`, `backend/main.py` | `/mcp/query` POST endpoint |
+| 8 | Router Integration | `backend/chains/rag_router.py` updated | 5th `"mcp"` classification for EMP-ID and action queries |
+| 9 | Frontend MCP Branch | `frontend/app.py` updated | MCP routing, confirmation banner, tool badges, trace expander |
+| 10 | DeepEval MCP Tests | `evaluation/tests/test_mcp.py` + golden set | 4 tests, 19 cases, 100% pass |
 
 ---
 
@@ -80,10 +95,11 @@ hr_advisor.py → tools.py → db_rag_query()      → PostgreSQL
 Phase 5 — Tools as a network service (HTTP calls):
 hr_advisor.py → MultiServerMCPClient → HTTP:8002/mcp → FastMCP server
                                                               ↓
-                                               check_leave_balance → PostgreSQL (read)
+                                               check_leave_balance  → PostgreSQL (read)
                                                submit_leave_request → PostgreSQL (WRITE)
-                                               get_org_chart → PostgreSQL (read)
-                                               policy_lookup → ChromaDB (read)
+                                               cancel_leave_request → PostgreSQL (DELETE)
+                                               get_org_chart        → PostgreSQL (read)
+                                               policy_lookup        → ChromaDB (read)
 ```
 
 **Tool selection routing — how the agent decides which tool to call:**
@@ -92,7 +108,8 @@ hr_advisor.py → MultiServerMCPClient → HTTP:8002/mcp → FastMCP server
 |---|---|---|
 | Named employee | "How many days does James Chen have?" | `lookup_employee` (Phase 4 direct) |
 | Employee ID | "Check leave for EMP-0001" | `check_leave_balance` (MCP) |
-| Action request | "Submit leave for EMP-0001 Dec 28-30" | `submit_leave_request` (MCP write) |
+| Action request — submit | "Submit leave for EMP-0001 Dec 28-30" | `submit_leave_request` (MCP write) |
+| Action request — cancel | "Cancel leave for EMP-0001 on Dec 28" | `cancel_leave_request` (MCP delete) |
 | Org by ID | "Get org chart for EMP-0001" | `get_org_chart` (MCP) |
 | Policy | "What is the leave policy?" | `search_policies` (Phase 4 direct) |
 | General HR | "What should a new hire know?" | `search_knowledge_base` (Phase 4 direct) |
@@ -141,7 +158,7 @@ langchain-mcp-adapters OK
 
 ### Concept
 
-The FastMCP server is a **separate process** from FastAPI. It runs on port 8002 and exposes 4 HR tools via HTTP transport. The server file defines the `mcp` instance first — tool module imports are deferred until after the instance is created because the `@mcp.tool` decorator in each tool file needs the `mcp` instance to exist when those modules load.
+The FastMCP server is a **separate process** from FastAPI. It runs on port 8002 and exposes 5 HR tools via HTTP transport. The server file defines the `mcp` instance first — tool module imports are deferred until after the instance is created because the `@mcp.tool` decorator in each tool file needs the `mcp` instance to exist when those modules load.
 
 **FastMCP 3.x key facts:**
 - `@mcp.tool` decorator (no parentheses in v3) turns any Python function into an MCP tool
@@ -205,89 +222,114 @@ The tool module imports are placed after `mcp` is defined so the decorators in `
 
 ### Concept
 
-Two tools in one file — one read, one write. `check_leave_balance` reads PostgreSQL for an employee's remaining leave days. `submit_leave_request` inserts a new `LeaveRecord` row — the **first write operation in the entire ARIA platform**.
+Three tools in one file — two write/delete, one read. `check_leave_balance` reads PostgreSQL. `submit_leave_request` inserts a new `LeaveRecord` — the **first write operation in ARIA**. `cancel_leave_request` deletes all matching pending records in a single atomic transaction — the **first delete operation in ARIA**.
 
-Both tools validate `employee_id` format before touching the database. `submit_leave_request` validates leave type against the allowed enum, parses and validates the date range, verifies the employee exists, then performs the insert in a single atomic transaction.
+The leave tool went through three refinement iterations after initial creation:
+1. Initial: 2 tools (`check_leave_balance` + `submit_leave_request`)
+2. Iteration 1: added `cancel_leave_request`
+3. Iteration 2: added duplicate guard to `submit_leave_request`
+4. Iteration 3: rewrote `cancel_leave_request` to delete all matching rows in one transaction
 
 **The key SQLAlchemy pattern distinction:**
 - `engine.connect()` for reads — lightweight, auto-closes, no transaction overhead
-- `engine.begin()` for writes — opens a transaction, auto-commits on success, auto-rolls back on any exception
+- `engine.begin()` for writes/deletes — opens a transaction, auto-commits on success, auto-rolls back on any exception
 
-### Claude Code Prompt
+### Claude Code Prompt — Initial (2 tools)
 
 ```
 Create mcp_server/tools/leave_tool.py with two FastMCP tools.
 
-Imports:
-  from mcp_server.server import mcp
-  from sqlalchemy import create_engine, text
-  from sqlalchemy.exc import SQLAlchemyError
-  from config.settings import settings
-  import datetime
-  import logging
-
 TOOL 1: check_leave_balance
-@mcp.tool
-def check_leave_balance(employee_id: str) -> str:
-    """
-    Check the current leave balance for an Acme Corp employee.
-    Use this tool when an employee asks how many leave days they
-    have remaining. Returns the employee name and leave balance
-    in days. employee_id must be in format EMP-XXXX e.g. EMP-0001.
-    """
-    - Validate employee_id starts with "EMP-"
-    - Use engine.connect() for read
-    - SELECT first_name, last_name, leave_balance, status FROM
-      employees WHERE employee_id = :emp_id
-    - Return: "{name} has {balance} days of leave remaining.
-      Status: {status}"
-    - On SQLAlchemyError: log and return error string
+  - Validate employee_id starts with "EMP-"
+  - engine.connect() — SELECT first_name, last_name, leave_balance,
+    status FROM employees WHERE employee_id = :emp_id
+  - Return: "{name} has {balance} days of leave remaining. Status: {status}"
+  - On SQLAlchemyError: log and return error string
 
-TOOL 2: submit_leave_request
-@mcp.tool
-def submit_leave_request(
-    employee_id: str,
-    start_date: str,
-    end_date: str,
-    leave_type: str = "Annual",
-    reason: str = "",
-) -> str:
-    """
-    Submit a new leave request for an Acme Corp employee.
-    This tool WRITES a new leave record to the database.
-    Use when an employee explicitly asks to submit, book, or
-    request leave. employee_id must be in EMP-XXXX format.
-    start_date and end_date must be in YYYY-MM-DD format.
-    leave_type must be one of: Annual, Sick, Parental,
-    Emergency, Unpaid. Default is Annual.
-    """
-    - Validate employee_id starts with "EMP-"
-    - Validate leave_type in allowed list
-    - Parse dates with datetime.date.fromisoformat()
-    - Validate end_date >= start_date
-    - Calculate days = (end_date - start_date).days + 1
-    - Use engine.begin() for atomic transaction
-    - Verify employee exists first — return error if not found
-    - INSERT INTO leave_records with status='Pending'
-    - Return confirmation string
-    - On exception: rollback, log, return error string
+TOOL 2: submit_leave_request(employee_id, start_date, end_date,
+    leave_type="Annual", reason="")
+  - Validate employee_id starts with "EMP-"
+  - Validate leave_type in [Annual, Sick, Parental, Emergency, Unpaid]
+  - Parse dates with datetime.date.fromisoformat()
+  - Validate end_date >= start_date, calculate days
+  - engine.begin() — verify employee exists, then INSERT INTO
+    leave_records with status='Pending'
+  - Return confirmation string
+  - On exception: log and return error string
+```
+
+### Claude Code Prompt — Iteration 1: cancel_leave_request
+
+```
+Update mcp_server/tools/leave_tool.py — add a third tool.
+
+TOOL 3: cancel_leave_request(employee_id, start_date, leave_type="")
+  """
+  Cancel a pending leave request for an Acme Corp employee.
+  This tool DELETES a pending leave record from the database.
+  Only Pending leave requests can be cancelled.
+  employee_id must be in EMP-XXXX format.
+  start_date must be in YYYY-MM-DD format.
+  leave_type is optional — if omitted, cancels first Pending found.
+  """
+  - Validate employee_id starts with "EMP-"
+  - Parse start_date — return error if invalid
+  - Single engine.begin() block:
+      SELECT id, leave_type, end_date FROM leave_records
+      WHERE employee_id=:emp_id AND start_date=:start_date
+      AND status='Pending'
+      AND (:leave_type='' OR leave_type=:leave_type)
+      ORDER BY id ASC  → fetchall()
+  - If none found: return "No pending leave request found..."
+  - Build IN clause with named params for each id:
+      id_params = {f"id_{i}": row.id for i, row in enumerate(found)}
+      placeholders = ", ".join([f":id_{i}" for i in range(len(found))])
+      DELETE FROM leave_records WHERE id IN ({placeholders})
+  - count == 1: return single-cancel confirmation
+  - count > 1: return "{count} duplicate pending requests cancelled..."
+```
+
+### Claude Code Prompt — Iteration 2: duplicate guard in submit
+
+```
+Update submit_leave_request in mcp_server/tools/leave_tool.py.
+
+After the employee existence check, before the INSERT, add:
+
+  existing = conn.execute(text(
+      "SELECT id FROM leave_records "
+      "WHERE employee_id = :emp_id "
+      "AND start_date = :start_date "
+      "AND status = 'Pending'"
+  ), {"emp_id": employee_id, "start_date": start_date}).fetchone()
+
+  if existing:
+      return (
+          f"A pending leave request already exists for "
+          f"{employee_id} starting {start_date}. "
+          f"Please cancel the existing request first."
+      )
 ```
 
 ### Implementation Notes from Claude Code
 
-- `engine.begin()` is used in `submit_leave_request` — it auto-commits on success and auto-rolls back on exception, so no explicit `conn.commit()` / `conn.rollback()` calls are needed.
-- `engine.connect()` is used in `check_leave_balance` since no write is needed.
-- The employee existence check and the insert share the same `engine.begin()` connection, so both run in one atomic transaction — if the employee check fails, no partial insert occurs.
+- `engine.begin()` auto-commits on success and auto-rolls back on exception — no explicit `conn.commit()` / `conn.rollback()` calls needed.
+- The duplicate guard, employee check, and INSERT all share the same `engine.begin()` connection — one atomic transaction.
+- `cancel_leave_request` uses `DELETE … WHERE id IN ({placeholders})` with named parameters because `ANY(:ids)` does not bind list values correctly in SQLAlchemy's text() layer.
+- Both the SELECT and DELETE in `cancel_leave_request` run inside a single `engine.begin()` block — no read/write split needed since the whole operation is one logical unit.
+- `found_records[0].leave_type` and `.end_date` are used in the confirmation message even for the multi-record case — the first record's type and end date represent the group.
 
 ### Exit Criteria
 
 | Check | Status |
 |---|---|
-| `leave_tool.py` created | ✅ |
+| `leave_tool.py` created with 3 tools | ✅ |
 | `check_leave_balance` registered on `mcp` instance | ✅ |
-| `submit_leave_request` registered on `mcp` instance | ✅ |
-| `engine.begin()` used for atomic write | ✅ |
-| `engine.connect()` used for read | ✅ |
+| `submit_leave_request` registered — validates, inserts, confirms | ✅ |
+| Duplicate guard prevents double-booking same start date | ✅ |
+| `cancel_leave_request` registered — deletes all matching pending rows | ✅ |
+| Single `engine.begin()` for both SELECT and DELETE in cancel | ✅ |
+| Named-parameter IN clause used (not ANY()) | ✅ |
 
 ---
 
@@ -302,51 +344,35 @@ Single tool that runs two queries inside one `engine.connect()` context: a three
 ```
 Create mcp_server/tools/org_chart_tool.py with one FastMCP tool.
 
-Imports:
-  from mcp_server.server import mcp
-  from sqlalchemy import create_engine, text
-  from sqlalchemy.exc import SQLAlchemyError
-  from config.settings import settings
-  import logging
-
 TOOL: get_org_chart
-@mcp.tool
-def get_org_chart(employee_id: str) -> str:
-    """
-    Get the organisational chart information for an Acme Corp
-    employee — their manager, direct reports, team, and level.
-    Use this tool when asked about reporting structure, who
-    someone reports to, or who reports to them.
-    employee_id must be in EMP-XXXX format e.g. EMP-0001.
-    """
-    - Validate employee_id starts with "EMP-"
-    - Use single engine.connect() for both queries
+  - Validate employee_id starts with "EMP-"
+  - Single engine.connect() for both queries
 
-    Query 1 — employee info + manager (LEFT JOIN for top-level):
-      SELECT e.first_name, e.last_name, e.role, e.department,
-             o.level, o.team, o.manager_id,
-             m.first_name AS manager_first,
-             m.last_name AS manager_last,
-             m.role AS manager_role
-      FROM employees e
-      JOIN org_chart o ON e.employee_id = o.employee_id
-      LEFT JOIN employees m ON o.manager_id = m.employee_id
-      WHERE e.employee_id = :emp_id
+  Query 1 — employee info + manager (LEFT JOIN for top-level):
+    SELECT e.first_name, e.last_name, e.role, e.department,
+           o.level, o.team, o.manager_id,
+           m.first_name AS manager_first,
+           m.last_name AS manager_last,
+           m.role AS manager_role
+    FROM employees e
+    JOIN org_chart o ON e.employee_id = o.employee_id
+    LEFT JOIN employees m ON o.manager_id = m.employee_id
+    WHERE e.employee_id = :emp_id
 
-    Query 2 — direct reports:
-      SELECT e.employee_id, e.first_name, e.last_name, e.role
-      FROM employees e
-      JOIN org_chart o ON e.employee_id = o.employee_id
-      WHERE o.manager_id = :emp_id
-      ORDER BY e.last_name
+  Query 2 — direct reports:
+    SELECT e.employee_id, e.first_name, e.last_name, e.role
+    FROM employees e
+    JOIN org_chart o ON e.employee_id = o.employee_id
+    WHERE o.manager_id = :emp_id
+    ORDER BY e.last_name
 
-    Build result string with 4 lines:
-      "{name} — {role} ({department})"
-      "Team: {team} | Level: {level}"
-      "Reports to: {manager}" or "No manager (top level)"
-      "Direct reports ({count}): {list}" or "None"
+  Build result string with 4 lines:
+    "{name} — {role} ({department})"
+    "Team: {team} | Level: {level}"
+    "Reports to: {manager}" or "No manager (top level)"
+    "Direct reports ({count}): {list}" or "None"
 
-    - On SQLAlchemyError: return error string
+  - On SQLAlchemyError: return error string
 ```
 
 ### Implementation Notes from Claude Code
@@ -368,36 +394,19 @@ Both queries run inside a single `engine.connect()` context so they share one co
 
 ### Concept
 
-The simplest of the four tools. Wraps the existing `search_and_format()` from `vector_store/searcher.py` as an MCP tool — giving any MCP-compatible client direct semantic search over the HR policy ChromaDB collection. No new code paths — pure reuse of the Phase 2 vector store infrastructure.
+The simplest of the five tools. Wraps the existing `search_and_format()` from `vector_store/searcher.py` as an MCP tool — giving any MCP-compatible client direct semantic search over the HR policy ChromaDB collection. No new code paths — pure reuse of the Phase 2 vector store infrastructure.
 
 ### Claude Code Prompt
 
 ```
 Create mcp_server/tools/policy_lookup_tool.py with one FastMCP tool.
 
-Imports:
-  from mcp_server.server import mcp
-  from vector_store.searcher import search_and_format
-  import logging
-
 TOOL: policy_lookup
-@mcp.tool
-def policy_lookup(query: str) -> str:
-    """
-    Search Acme Corp HR policy documents for a specific clause,
-    rule, or entitlement. Use this tool when an employee asks
-    about a specific policy topic and needs the exact wording
-    or details from the official policy documents.
-    Returns the most relevant policy excerpts with source citations.
-    query should be a specific topic or keyword, for example:
-    'parental leave entitlement', 'probation period notice',
-    '401k contribution matching'.
-    """
-    - Call search_and_format(query, n_results=3)
-    - Log: f"Policy lookup MCP tool called: {query[:50]}"
-    - If result is empty or sentinel "No relevant information found.":
-      return "No policy information found. Contact hr@acmecorp.com"
-    - Return formatted result string
+  - Call search_and_format(query, n_results=3)
+  - Log: f"Policy lookup MCP tool called: {query[:50]}"
+  - If result is empty or "No relevant information found.":
+    return "No policy information found. Contact hr@acmecorp.com"
+  - Return formatted result string
 ```
 
 ### Implementation Notes from Claude Code
@@ -484,9 +493,10 @@ asyncio.run(list_tools())
 ### Tool Registration Results
 
 ```
-Tools registered: 4
+Tools registered: 5
   - check_leave_balance
   - submit_leave_request
+  - cancel_leave_request
   - get_org_chart
   - policy_lookup
 ```
@@ -573,6 +583,34 @@ Type: Annual. Status: Pending.
 Your manager will be notified for approval.
 ```
 
+### Verify Cancel Tool
+
+```bash
+uv run python -c "
+import asyncio
+from fastmcp import Client
+
+async def test_cancel():
+    async with Client('http://localhost:8002/mcp') as client:
+        result = await client.call_tool('cancel_leave_request', {
+            'employee_id': 'EMP-0001',
+            'start_date': '2026-12-25',
+            'leave_type': 'Annual',
+        })
+        print(result.data)
+
+asyncio.run(test_cancel())
+"
+```
+
+### Cancel Tool Result
+
+```
+Leave request cancelled successfully for EMP-0001.
+Annual leave from 2026-12-25 to 2026-12-27 has been removed.
+Status was: Pending.
+```
+
 ### Database Write Verification
 
 ```bash
@@ -594,11 +632,12 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
 | Check | Status |
 |---|---|
 | MCP server starts on port 8002 | ✅ |
-| 4 tools registered and listed | ✅ |
+| 5 tools registered and listed | ✅ |
 | `check_leave_balance` returns correct data | ✅ James Chen, 30 days, Active |
 | `get_org_chart` returns hierarchy with direct reports | ✅ Platform Team, Level 2, 2 reports |
 | `policy_lookup` returns ChromaDB chunks with citations | ✅ |
 | `submit_leave_request` writes to PostgreSQL | ✅ |
+| `cancel_leave_request` deletes from PostgreSQL | ✅ |
 | Row confirmed in `leave_records` table | ✅ EMP-0001, Dec 25-27, Pending |
 
 ---
@@ -607,7 +646,7 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
 
 ### Concept
 
-Wire the MCP server tools into the Phase 4 ReAct agent alongside the existing 3 direct tools. The agent gains 4 new tools from the MCP server, bringing the total to 7. This step also migrates `hr_advisor.py` from the Phase 4 `create_react_agent` (LangChain 0.3.x) pattern to `create_agent` (LangChain 1.3.1 / LangGraph 1.2.0), which was necessary because `langchain-mcp-adapters` pulled in updated LangChain dependencies.
+Wire the MCP server tools into the Phase 4 ReAct agent alongside the existing 3 direct tools. The agent gains 5 new tools from the MCP server, bringing the total to 8. This step also migrates `hr_advisor.py` from the Phase 4 `create_react_agent` (LangChain 0.3.x) pattern to `create_agent` (LangChain 1.3.1 / LangGraph 1.2.0), which was necessary because `langchain-mcp-adapters` pulled in updated LangChain dependencies.
 
 ### Version Context Discovered During Phase 5
 
@@ -645,14 +684,19 @@ Update agents/single/hr_advisor.py to add MCP tools.
 
 The existing 3 tools and run_hr_advisor() must remain unchanged.
 
-CHANGE 1 — Add imports:
-  from langchain_mcp_adapters.client import MultiServerMCPClient
-  import asyncio
+CHANGE 1 — Fix imports:
+  Remove: from langgraph.prebuilt import create_react_agent
+  Add:    from langchain.agents import create_agent
+          from langchain_mcp_adapters.client import MultiServerMCPClient
+          import asyncio
 
 CHANGE 2 — Add constant after imports:
   MCP_SERVER_URL = "http://localhost:8002/mcp"
 
-CHANGE 3 — Add run_hr_advisor_with_mcp() async function:
+CHANGE 3 — Fix all existing create_agent calls to use system_prompt=
+  (not prompt=) and remove any AgentExecutor usage.
+
+CHANGE 4 — Add run_hr_advisor_with_mcp() async function:
   async def run_hr_advisor_with_mcp(question: str) -> AgentResponse:
       try:
           mcp_client = MultiServerMCPClient(
@@ -670,8 +714,7 @@ CHANGE 3 — Add run_hr_advisor_with_mcp() async function:
               {"messages": [{"role": "user", "content": question}]}
           )
           answer = result["messages"][-1].content
-          steps = []
-          tools_used = []
+          steps, tools_used = [], []
           for msg in result["messages"]:
               if hasattr(msg, "tool_calls") and msg.tool_calls:
                   for tc in msg.tool_calls:
@@ -690,11 +733,6 @@ CHANGE 3 — Add run_hr_advisor_with_mcp() async function:
               answer=f"Error processing request. (Error: {e})",
               steps=[], tools_used=[], success=False,
           )
-
-Also fix all imports and create_agent calls to use:
-  from langchain.agents import create_agent
-  system_prompt= (not prompt=)
-Remove MultiServerMCPClient context manager pattern.
 ```
 
 ### Run Command
@@ -798,7 +836,7 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
 |---|---|
 | `run_hr_advisor_with_mcp()` created | ✅ |
 | MCP tools loaded via `MultiServerMCPClient` | ✅ |
-| Agent has 7 tools total (3 direct + 4 MCP) | ✅ |
+| Agent has 8 tools total (3 direct + 5 MCP) | ✅ |
 | EMP-ID queries route to MCP tools | ✅ |
 | Name-based queries route to Phase 4 direct tools | ✅ |
 | Compound query uses both tool sources | ✅ |
@@ -806,7 +844,177 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
 
 ---
 
-## Step 7 — DeepEval MCP Tests
+## Step 7 — Backend API Route
+
+### Concept
+
+Expose the MCP agent as a FastAPI endpoint at `POST /mcp/query`. This is identical in structure to the `/agent/query` route from Phase 4 — same request/response shape, same error handling — but calls `run_hr_advisor_with_mcp()` instead of `run_hr_advisor()`. The route is async end-to-end because `run_hr_advisor_with_mcp` is an `async` function.
+
+### Claude Code Prompt
+
+```
+Create backend/api/routes/mcp_agent.py
+
+router = APIRouter(prefix="/mcp", tags=["mcp"])
+
+Request model MCPAgentRequest: question: str
+Response model MCPAgentResponse:
+  answer, tools_used, steps, success, question
+
+POST /mcp/query — async:
+  - Await run_hr_advisor_with_mcp(request.question)
+  - If not result.success: raise HTTPException(500, result.answer)
+  - Return MCPAgentResponse(...)
+  - Log: f"MCP query: {request.question[:50]}"
+  - Wrap in try/except — re-raise HTTPException, wrap others as 500
+
+Update backend/main.py:
+  from backend.api.routes import mcp_agent as mcp_agent_router
+  app.include_router(mcp_agent_router.router)
+```
+
+### Implementation Notes from Claude Code
+
+The `except HTTPException: raise` guard in the route ensures the `result.success` failure path re-raises cleanly rather than being caught and re-wrapped as a second 500 with a generic string detail.
+
+### Exit Criteria
+
+| Check | Status |
+|---|---|
+| `backend/api/routes/mcp_agent.py` created | ✅ |
+| `POST /mcp/query` endpoint registered | ✅ |
+| Route is async — calls `await run_hr_advisor_with_mcp()` | ✅ |
+| `backend/main.py` updated with `include_router` | ✅ |
+| HTTPException re-raised correctly (not double-wrapped) | ✅ |
+
+---
+
+## Step 8 — Router Integration
+
+### Concept
+
+Add `"mcp"` as a fifth classification to `classify_query()` in `backend/chains/rag_router.py`. The MCP classification takes **highest priority** — any question containing an EMP-XXXX employee ID, or using an explicit action verb (submit, book, request, cancel, delete, withdraw), routes to MCP before any other classification is considered.
+
+### Claude Code Prompt
+
+```
+Update backend/chains/rag_router.py
+
+Add "mcp" as a fifth classification to classify_query().
+It takes highest priority — place it first in the prompt.
+
+Rules for "mcp":
+- Any question containing an employee ID in EMP-XXXX format
+- Any explicit action request: submit, book, request, cancel,
+  delete, withdraw leave
+- Any org chart lookup by employee ID
+
+Examples:
+  "Check the leave balance for EMP-0001"
+  "Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18"
+  "Book Sick leave for EMP-0022 from 2027-07-01 to 2027-07-01"
+  "Who are the direct reports of EMP-0001?"
+  "Get the org chart for EMP-0001"
+  "Cancel my leave request for EMP-0001 on 2027-09-01"
+  "Delete the pending leave for EMP-0001 from 2027-09-01"
+  "Withdraw leave request for EMP-0001 starting 2027-09-01"
+  "Cancel Annual leave for EMP-0001 from 2027-09-01"
+
+IMPORTANT line: "Classify as 'mcp' first — any question with an
+EMP-XXXX ID or an explicit leave action verb takes priority over
+all other categories."
+
+Also update the fallback guard:
+  if result not in ("mcp", "agent", "rag", "db", "chat"):
+      result = "rag"
+```
+
+### Exit Criteria
+
+| Check | Status |
+|---|---|
+| `"mcp"` added as first classification block in prompt | ✅ |
+| 9 examples covering check, submit, cancel, delete, withdraw, org chart | ✅ |
+| Priority IMPORTANT line added to prompt | ✅ |
+| Fallback guard updated to include `"mcp"` | ✅ |
+| Existing chat / rag / db / agent rules unchanged | ✅ |
+
+---
+
+## Step 9 — Frontend MCP Branch
+
+### Concept
+
+Three additions to `frontend/app.py`: an MCP server status check in the sidebar, a `get_mcp_response()` helper alongside `get_agent_response()`, and an `elif classification == "mcp":` routing branch in the chat loop. The MCP branch renders a confirmation banner for write operations, styled tool badges, and a collapsible reasoning trace.
+
+### Claude Code Prompt
+
+```
+Update frontend/app.py — three changes.
+
+CHANGE 1 — Add MCP sidebar status check after Agent check:
+  try:
+      httpx.post(f"{BACKEND_URL}/mcp/query",
+                 json={"question": "ping"}, timeout=5)
+      st.sidebar.success("🔧 MCP Server: Online")
+  except:
+      st.sidebar.error("🔧 MCP Server: Offline")
+
+CHANGE 2 — Add helper alongside get_agent_response():
+  def get_mcp_response(question: str) -> dict:
+      response = httpx.post(f"{BACKEND_URL}/mcp/query",
+                            json={"question": question}, timeout=90)
+      response.raise_for_status()
+      return response.json()
+
+CHANGE 3 — Add elif branch after the "agent" block:
+  elif classification == "mcp":
+      result = get_mcp_response(prompt)
+      with st.chat_message("assistant"):
+          st.markdown("🔧 **MCP Action**")
+          st.markdown(result["answer"])
+          if "submit_leave_request" in result.get("tools_used", []):
+              st.success("✅ Leave request submitted — record created")
+          if result.get("tools_used"):
+              tool_icons = {
+                  "check_leave_balance":  "💰",
+                  "submit_leave_request": "✍️",
+                  "cancel_leave_request": "🗑️",
+                  "get_org_chart":        "🏢",
+                  "policy_lookup":        "📋",
+              }
+              cols = st.columns(len(result["tools_used"]))
+              for i, tool in enumerate(result["tools_used"]):
+                  icon = tool_icons.get(tool, "🔧")
+                  cols[i].markdown(f"<span ...>{icon} {tool}</span>",
+                                   unsafe_allow_html=True)
+          if result.get("steps"):
+              with st.expander(f"🔧 MCP Tool Calls ({len(...)} steps)"):
+                  for i, step in enumerate(result["steps"], 1):
+                      st.markdown(f"**Step {i} — {step['tool']}**")
+                      st.markdown(f"*Tool input:* `{step['tool_input']}`")
+                      if step.get("observation"):
+                          st.text(step["observation"][:400])
+                      else:
+                          st.caption("MCP tool — result in final answer")
+      st.session_state.messages.append({...})
+```
+
+### Exit Criteria
+
+| Check | Status |
+|---|---|
+| Sidebar shows MCP Server Online / Offline | ✅ |
+| `get_mcp_response()` helper calls `/mcp/query` | ✅ |
+| `elif classification == "mcp":` branch added | ✅ |
+| Confirmation banner for `submit_leave_request` | ✅ |
+| Tool badges with icons for all 5 MCP tools | ✅ |
+| Reasoning trace expander shows steps | ✅ |
+| `chat` / `rag` / `db` / `agent` branches unchanged | ✅ |
+
+---
+
+## Step 10 — DeepEval MCP Tests
 
 ### Concept
 
@@ -1001,12 +1209,15 @@ Cost: $0.031 | Time: 29s
 | Step | What Was Built | Status |
 |---|---|---|
 | Step 1 | FastMCP server — entry point, package files, HTTP transport port 8002 | ✅ |
-| Step 2 | Leave tool — `check_leave_balance` (read) + `submit_leave_request` (write) | ✅ |
+| Step 2 | Leave tool — `check_leave_balance` (read) + `submit_leave_request` (write) + `cancel_leave_request` (delete) | ✅ |
 | Step 3 | Org chart tool — `get_org_chart` with self-join for manager lookup | ✅ |
 | Step 4 | Policy lookup tool — wraps `search_and_format()` as MCP tool | ✅ |
 | Step 5 | MCP start script + full server verification via FastMCP Python client | ✅ |
-| Step 6 | Agent MCP integration — 7 tools, LangChain 1.3.1 migration, 2 DB writes confirmed | ✅ |
-| Step 7 | DeepEval — 4 tests, 19 cases, 100% pass rate, $0.080 total cost | ✅ |
+| Step 6 | Agent MCP integration — 8 tools, LangChain 1.3.1 migration, 2 DB writes confirmed | ✅ |
+| Step 7 | Backend API route — `POST /mcp/query` endpoint wired into `main.py` | ✅ |
+| Step 8 | Router integration — 5th `"mcp"` classification in `classify_query()` | ✅ |
+| Step 9 | Frontend MCP branch — sidebar status, tool badges, confirmation banner, trace | ✅ |
+| Step 10 | DeepEval — 4 tests, 19 cases, 100% pass rate, $0.080 total cost | ✅ |
 
 ---
 
@@ -1019,8 +1230,14 @@ Cost: $0.031 | Time: 29s
 | EMP-ID balance check | ❌ Not supported | ✅ `check_leave_balance` via MCP |
 | Org chart by ID | ❌ Not supported | ✅ `get_org_chart` via MCP |
 | Leave submission | ❌ Read-only platform | ✅ `submit_leave_request` — WRITE |
-| Total agent tools | 3 | **7** |
+| Leave cancellation | ❌ Read-only platform | ✅ `cancel_leave_request` — DELETE |
+| Duplicate leave guard | ❌ | ✅ Prevents double-booking same start date |
+| Backend MCP endpoint | ❌ | ✅ `POST /mcp/query` |
+| Query router | 4-way (chat/rag/db/agent) | ✅ 5-way (+ mcp) |
+| Frontend MCP UI | ❌ | ✅ Confirmation banner + tool badges |
+| Total agent tools | 3 | **8** |
 | Database writes | ❌ Zero | ✅ First write in ARIA |
+| Database deletes | ❌ Zero | ✅ First delete in ARIA |
 | Tool architecture | Direct Python calls | Phase 4 direct + MCP network service |
 | DeepEval pass rate | 100% (19 cases) | 100% (19 cases) |
 
@@ -1032,10 +1249,10 @@ Cost: $0.031 | Time: 29s
 |---|---|---|
 | MCP server must be started manually in a separate terminal | Medium | Add to `docker-compose.yml` as a service |
 | `submit_leave_request` does not deduct from `leave_balance` | Medium | Add `UPDATE employees SET leave_balance = leave_balance - {days}` in same transaction |
+| `cancel_leave_request` does not restore `leave_balance` | Medium | Add `UPDATE employees SET leave_balance = leave_balance + {days}` in same transaction |
 | `run_hr_advisor_with_mcp()` creates new `MultiServerMCPClient` per call | Low | Module-level singleton with connection reuse |
-| FastAPI `/agent/query` still uses Phase 4 direct tools only | Medium | Update route to call `run_hr_advisor_with_mcp()` |
-| No human-in-the-loop before write operations | Medium | Phase 6 LangGraph interrupt node for write approval |
-| Streamlit does not distinguish MCP vs direct tool badges | Low | Phase 8 — add MCP action badge style |
+| No human-in-the-loop before write/delete operations | Medium | Phase 6 LangGraph interrupt node for write approval |
+| DeepEval golden set does not cover `cancel_leave_request` | Low | Add 3 cancel entries to `mcp_golden_set.json` in Phase 6 |
 
 ---
 
@@ -1090,8 +1307,8 @@ Phase 6 adds **multi-agent LangGraph orchestration** — a `StateGraph` that rou
 - `agents/specialist/onboarding_agent.py` — Hybrid retriever specialist
 - `agents/specialist/payroll_agent.py` — Benefits specialist
 - `agents/orchestrator/graph.py` — LangGraph `StateGraph` wiring all agents
-- Human-in-the-loop interrupt node before `submit_leave_request` fires
+- Human-in-the-loop interrupt node before `submit_leave_request` and `cancel_leave_request` fire
 
-**The Phase 5 baseline must be maintained:** All 4 MCP tools must continue responding correctly through Phase 6. `submit_leave_request` is foundational to the Phase 6 Leave Agent.
+**The Phase 5 baseline must be maintained:** All 5 MCP tools must continue responding correctly through Phase 6. `submit_leave_request` and `cancel_leave_request` are foundational to the Phase 6 Leave Agent.
 
-> **The Phase 5 milestone:** ARIA can now act, not just answer. The `submit_leave_request` tool is the first time a user's natural language instruction directly modifies database state. This is the foundation of every agentic workflow in Phases 6–8 — the pattern that separates a Q&A chatbot from an enterprise AI agent.
+> **The Phase 5 milestone:** ARIA can now act, not just answer. `submit_leave_request` is the first time a user's natural language instruction directly modifies database state. `cancel_leave_request` completes the leave management lifecycle. These are the foundation of every agentic workflow in Phases 6–8 — the pattern that separates a Q&A chatbot from an enterprise AI agent.

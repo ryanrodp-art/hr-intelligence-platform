@@ -42,6 +42,24 @@
     "expected_mcp_tool": "submit_leave_request"
   },
   {
+    "input": "Cancel Annual leave for EMP-0001 starting 2027-01-02",
+    "expected_output": "Leave request cancelled successfully for EMP-0001. Annual leave from 2027-01-02 to 2027-01-03 has been removed. Status was: Pending.",
+    "query_type": "cancel",
+    "expected_mcp_tool": "cancel_leave_request"
+  },
+  {
+    "input": "Delete the Sick leave request for EMP-0022 on 2027-01-10",
+    "expected_output": "Leave request cancelled successfully for EMP-0022. Sick leave from 2027-01-10 to 2027-01-10 has been removed. Status was: Pending.",
+    "query_type": "cancel",
+    "expected_mcp_tool": "cancel_leave_request"
+  },
+  {
+    "input": "Withdraw Emergency leave for EMP-0001 starting 2027-02-14",
+    "expected_output": "Leave request cancelled successfully for EMP-0001. Emergency leave from 2027-02-14 to 2027-02-14 has been removed. Status was: Pending.",
+    "query_type": "cancel",
+    "expected_mcp_tool": "cancel_leave_request"
+  },
+  {
     "input": "Check leave balance for EMP-0001 and look up the parental leave policy",
     "expected_output": "James Chen has 30 days remaining. Parental leave: 16 weeks primary caregiver, 4 weeks secondary caregiver.",
     "query_type": "multi_step",

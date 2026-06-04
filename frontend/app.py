@@ -64,6 +64,16 @@ try:
 except Exception:
     st.sidebar.error("🤖 Agent: Offline")
 
+try:
+    httpx.post(
+        f"{BACKEND_URL}/mcp/query",
+        json={"question": "ping"},
+        timeout=5,
+    )
+    st.sidebar.success("🔧 MCP Server: Online")
+except:
+    st.sidebar.error("🔧 MCP Server: Offline")
+
 st.sidebar.divider()
 st.sidebar.markdown("**Session ID**")
 st.sidebar.caption(st.session_state.session_id)
@@ -122,6 +132,17 @@ def get_agent_response(question: str) -> dict:
         f"{BACKEND_URL}/agent/query",
         json={"question": question},
         timeout=60,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def get_mcp_response(question: str) -> dict:
+    """Call /mcp/query and return the full response dict."""
+    response = httpx.post(
+        f"{BACKEND_URL}/mcp/query",
+        json={"question": question},
+        timeout=90,
     )
     response.raise_for_status()
     return response.json()
@@ -268,6 +289,63 @@ if prompt := st.chat_input("Ask ARIA anything about HR..."):
                 "role": "assistant",
                 "content": result["answer"],
             })
+
+    elif classification == "mcp":
+        result = get_mcp_response(prompt)
+
+        with st.chat_message("assistant"):
+            st.markdown("🔧 **MCP Action**")
+            st.markdown(result["answer"])
+
+            # Write confirmation banner
+            if "submit_leave_request" in result.get("tools_used", []):
+                st.success(
+                    "✅ Leave request submitted — "
+                    "record created in database"
+                )
+
+            # Tool badges
+            if result.get("tools_used"):
+                tool_icons = {
+                    "check_leave_balance":  "💰",
+                    "submit_leave_request": "✍️",
+                    "get_org_chart":        "🏢",
+                    "policy_lookup":        "📋",
+                }
+                cols = st.columns(len(result["tools_used"]))
+                for i, tool in enumerate(result["tools_used"]):
+                    icon = tool_icons.get(tool, "🔧")
+                    cols[i].markdown(
+                        f"<span style='background:#1a1a2e;"
+                        f"padding:4px 10px;border-radius:12px;"
+                        f"font-size:0.8em;color:#00C8FF'>"
+                        f"{icon} {tool}</span>",
+                        unsafe_allow_html=True,
+                    )
+
+            # Reasoning trace
+            if result.get("steps"):
+                with st.expander(
+                    f"🔧 MCP Tool Calls ({len(result['steps'])} steps)"
+                ):
+                    for i, step in enumerate(result["steps"], 1):
+                        st.markdown(f"**Step {i} — {step['tool']}**")
+                        st.markdown(
+                            f"*Tool input:* `{step['tool_input']}`"
+                        )
+                        if step.get("observation"):
+                            st.text(step["observation"][:400])
+                        else:
+                            st.caption(
+                                "MCP tool — result in final answer"
+                            )
+                        if i < len(result["steps"]):
+                            st.divider()
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": result["answer"],
+        })
 
     else:
         response_text = None

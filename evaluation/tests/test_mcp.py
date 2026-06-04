@@ -72,6 +72,22 @@ def test_mcp_write_tool(mcp_golden_set, mcp_metrics):
     assert all(r.success for r in results.test_results)
 
 
+def test_mcp_cancel_tool(mcp_golden_set, mcp_metrics):
+    """cancel_leave_request must confirm deletion and return removed status.
+
+    NOTE: This test depends on test_mcp_write_tool having run first in the
+    same session to create the pending records that are cancelled here.
+    Run order: test_mcp_write_tool → test_mcp_cancel_tool.
+    """
+    items = [i for i in mcp_golden_set if i["query_type"] == "cancel"][:3]
+    test_cases = [build_mcp_test_case(item) for item in items]
+    results = evaluate(
+        test_cases=test_cases,
+        metrics=[mcp_metrics["task_completion"], mcp_metrics["answer_relevancy"]],
+    )
+    assert all(r.success for r in results.test_results)
+
+
 def test_mcp_multi_step(mcp_golden_set, mcp_metrics):
     """Multi-step MCP sequences must handle both tools correctly."""
     items = [i for i in mcp_golden_set if i["query_type"] == "multi_step"]
@@ -84,7 +100,17 @@ def test_mcp_multi_step(mcp_golden_set, mcp_metrics):
 
 
 def test_mcp_tool_routing_boundary(mcp_golden_set):
-    """Every golden set entry must invoke its expected MCP tool."""
+    """Every golden set entry must invoke its expected MCP tool.
+
+    Covers all 5 MCP tools across 13 entries:
+      read (4)         — check_leave_balance x2, get_org_chart x2
+      write (3)        — submit_leave_request x3
+      cancel (3)       — cancel_leave_request x3
+      multi_step (3)   — check_leave_balance, get_org_chart, submit_leave_request
+
+    Cancel entries will call cancel_leave_request regardless of whether a
+    pending record exists — the tool is always invoked, the response varies.
+    """
     failures = []
     for item in mcp_golden_set:
         result = get_mcp_response(item["input"])

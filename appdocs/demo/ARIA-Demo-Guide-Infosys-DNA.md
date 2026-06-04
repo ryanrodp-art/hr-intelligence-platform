@@ -43,12 +43,21 @@ curl -s -X POST http://localhost:8000/rag/db/query \
   -H "Content-Type: application/json" \
   -d '{"question": "How many leave days does James Chen have?"}' | python3 -m json.tool
 
-# 9. Verify four-way router
+# 9. Verify five-way router
+curl "http://localhost:8000/rag/classify?query=What+is+the+parental+leave+policy"
+# Expected: {"classification": "rag"}
+
 curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Chen+have"
 # Expected: {"classification": "db"}
 
 curl "http://localhost:8000/rag/classify?query=What+is+the+leave+policy+and+how+many+days+does+James+Chen+have"
 # Expected: {"classification": "agent"}
+
+curl "http://localhost:8000/rag/classify?query=Check+the+leave+balance+for+EMP-0001"
+# Expected: {"classification": "mcp"}
+
+curl "http://localhost:8000/rag/classify?query=Cancel+Annual+leave+for+EMP-0001+starting+2027-06-16"
+# Expected: {"classification": "mcp"}
 
 # 10. Verify agent endpoint
 curl -s -X POST http://localhost:8000/agent/query \
@@ -56,7 +65,7 @@ curl -s -X POST http://localhost:8000/agent/query \
   -d '{"question": "What is the parental leave policy?"}' | python3 -m json.tool
 # Expected: {"answer": "...", "tools_used": ["search_policies"], "success": true}
 
-# 11. Verify MCP server tools (FastMCP Python client — curl won't work)
+# 11. Verify MCP server tools (FastMCP Python client — curl won't work for MCP 3.x)
 uv run python -c "
 import asyncio
 from fastmcp import Client
@@ -66,19 +75,28 @@ async def check():
         print([t.name for t in tools])
 asyncio.run(check())
 "
-# Expected: ['check_leave_balance', 'submit_leave_request', 'get_org_chart', 'policy_lookup']
+# Expected: ['check_leave_balance', 'submit_leave_request', 'cancel_leave_request',
+#            'get_org_chart', 'policy_lookup']
+
+# 12. Verify MCP endpoint via FastAPI
+curl -s -X POST http://localhost:8000/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Check the leave balance for EMP-0001"}' | python3 -m json.tool
+# Expected: {"answer": "James Chen has 30 days...", "tools_used": ["check_leave_balance"], "success": true}
 ```
 
 **You should see before the demo starts:**
 - ✅ Streamlit UI open with "Backend Connected" in sidebar
 - ✅ Sidebar shows "📄 19 policy chunks indexed"
 - ✅ Sidebar shows "🤖 Agent: Online"
+- ✅ Sidebar shows "🔧 MCP Server: Online"
 - ✅ ARIA welcome message visible in chat
 - ✅ DB RAG query returns `{"answer": "James Chen has 30 days of leave remaining.", "success": true}`
-- ✅ Router returns `{"classification": "db"}` for the James Chen question
+- ✅ Router returns `{"classification": "db"}` for the James Chen name question
 - ✅ Router returns `{"classification": "agent"}` for the compound question
+- ✅ Router returns `{"classification": "mcp"}` for the EMP-0001 question
 - ✅ Agent endpoint returns `{"tools_used": ["search_policies"], "success": true}`
-- ✅ MCP server returns 4 tools: `check_leave_balance`, `submit_leave_request`, `get_org_chart`, `policy_lookup`
+- ✅ MCP server returns 5 tools: `check_leave_balance`, `submit_leave_request`, `cancel_leave_request`, `get_org_chart`, `policy_lookup`
 - ✅ Terminal Tab 3 ready with env vars set
 - ✅ Terminal Tab 4 showing MCP server running on port 8002
 
@@ -102,57 +120,61 @@ asyncio.run(check())
 ┌─────────────────────────────────────────────────────────┐
 │                    STREAMLIT UI                          │
 │ Chat · RAG citations · SQL expander · Agent trace       │
-│ Routing badges · DB record count · MCP action badges    │
+│ MCP action badge · Write confirmation banner            │
 └──────────────────────┬──────────────────────────────────┘
-                       │ HTTP (SSE streaming)
+                       │ HTTP (SSE streaming / JSON)
 ┌──────────────────────▼──────────────────────────────────┐
 │                   FASTAPI BACKEND                        │
-│  /chat/stream  /rag/stream  /rag/db/stream  /agent/query│
-│  /rag/db/query  /rag/classify  /rag/status  /chat/stats │
+│  /chat/stream  /rag/stream  /rag/db/stream              │
+│  /agent/query  /mcp/query                               │
+│  /rag/classify  /rag/status  /chat/stats                │
 └──────┬──────────────────────────────────┬───────────────┘
        │                                  │
        │                    ┌─────────────▼──────────────┐
-       │                    │   FOUR-WAY ROUTER           │
+       │                    │   FIVE-WAY ROUTER           │
        │                    │   GPT-4o · temperature=0   │
-       │                    │  "rag"/"db"/"chat"/"agent" │
-       │                    └──────┬──────────┬──┬───────┘
-       │                           │          │  │
-┌──────▼──────────┐    ┌───────────▼──┐   ┌──▼──▼──────────────┐
-│  LANGCHAIN      │    │  DOCUMENT    │   │  DATABASE RAG      │
-│  Chat Chain     │    │  RAG CHAIN   │   │  NL-to-SQL (GPT-4o)│
-│  Memory         │    │  Retriever   │   │  SQLAlchemy        │
-│  GPT-4o (0.7)   │    │  GPT-4o(0.1) │   │  GPT-4o (temp=0)   │
-└─────────────────┘    └──────┬───────┘   └─────┬──────────────┘
-                              │                  │
-              ┌───────────────▼──┐    ┌──────────▼──────────────┐
-              │    CHROMADB      │    │      POSTGRESQL          │
-              │  19 vectors      │    │  50 employees            │
-              │  hr_policies     │    │  30 leave records        │
-              │  text-embedding  │    │  50 org chart rows       │
-              └──────────────────┘    └─────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
+       │                    │  mcp/rag/db/chat/agent     │
+       │                    └──┬──┬──────┬──┬────────────┘
+       │                       │  │      │  │
+       │          ┌────────────▼┐ │ ┌────▼──▼────────────┐
+       │          │  DOCUMENT   │ │ │  DATABASE RAG      │
+       │          │  RAG CHAIN  │ │ │  NL-to-SQL (GPT-4o)│
+       │          │  GPT-4o     │ │ │  SQLAlchemy        │
+       │          └──────┬──────┘ │ └────────┬───────────┘
+       │                 │        │           │
+       │     ┌───────────▼──┐ ┌──▼──┐ ┌─────▼──────────┐
+       │     │   CHROMADB   │ │CHAT │ │  POSTGRESQL    │
+       │     │  19 vectors  │ │GPT  │ │  50 employees  │
+       │     └──────────────┘ └─────┘ │  30+ leave recs│
+       │                              └────────────────┘
+       │
+┌──────▼─────────────────────────────────────────────────┐
 │          SINGLE HR ADVISOR AGENT (Phase 4 + 5)          │
-│   LangChain create_agent · max_iterations=7 · temp=0   │
-│   Phase 4 Direct Tools:                                 │
+│   LangChain create_agent · 8 tools · temp=0            │
+│                                                         │
+│   Phase 4 Direct Tools (natural language inputs):       │
 │   ┌──────────────┐ ┌───────────────┐ ┌───────────────┐ │
 │   │search_policie│ │lookup_employee│ │search_knowled-│ │
 │   │s → ChromaDB  │ │→ PostgreSQL   │ │ge_base→ChromDB│ │
 │   └──────────────┘ └───────────────┘ └───────────────┘ │
 │                                                         │
-│   Phase 5 MCP Tools via HTTP:8002:                      │
-│   ┌──────────────┐ ┌───────────────┐ ┌───────────────┐ ┌──────────────┐│
-│   │check_leave_  │ │submit_leave_  │ │get_org_chart  │ │policy_lookup ││
-│   │balance→PG    │ │request→PG✍️   │ │→ PG self-join │ │→ ChromaDB    ││
-│   └──────────────┘ └───────────────┘ └───────────────┘ └──────────────┘│
-└─────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────┐
+│   Phase 5 MCP Tools (EMP-ID / structured inputs):      │
+│   ┌─────────────┐ ┌──────────────┐ ┌──────────────┐   │
+│   │check_leave_ │ │submit_leave_ │ │cancel_leave_ │   │
+│   │balance → PG │ │request → PG✍️│ │request → PG🗑│   │
+│   └─────────────┘ └──────────────┘ └──────────────┘   │
+│   ┌─────────────┐ ┌──────────────┐                     │
+│   │get_org_chart│ │policy_lookup │                     │
+│   │→ PG self-jn │ │→ ChromaDB    │                     │
+│   └─────────────┘ └──────────────┘                     │
+└─────────────────────────┬──────────────────────────────┘
+                          │ HTTP → localhost:8002/mcp
+┌─────────────────────────▼──────────────────────────────┐
 │              FASTMCP SERVER (Port 8002)                  │
 │   FastMCP 3.3.1 · HTTP Transport · /mcp endpoint        │
-│   Separate process — any MCP client can connect         │
-│   Tools: check_leave_balance · submit_leave_request     │
-│          get_org_chart · policy_lookup                  │
+│   5 tools: check_leave_balance · submit_leave_request   │
+│            cancel_leave_request · get_org_chart         │
+│            policy_lookup                                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -165,7 +187,7 @@ asyncio.run(check())
 | **2** *(Done)* | Document RAG, citations, two-way routing | + Faithfulness, ContextualPrecision, ContextualRecall |
 | **3** *(Done)* | Database RAG, NL-to-SQL, three-way routing | + Faithfulness (DB), AnswerRelevancy (DB), RoutingBoundary |
 | **4** *(Done)* | ReAct agent, 3 tools, four-way routing, reasoning trace | + TaskCompletion, ToolCorrectness, AnswerRelevancy |
-| **5** *(Done)* | MCP server, 4 action tools, first DB write, 7-tool agent | + TaskCompletion (MCP), AnswerRelevancy (MCP), ToolRouting |
+| **5** *(Done)* | MCP server, 5 action tools, first DB write + delete, 8-tool agent, five-way routing | + TaskCompletion (MCP), AnswerRelevancy (MCP), ToolRouting |
 | **6** | Multi-agent LangGraph | + StepEfficiency, PlanAdherence, PlanQuality |
 | **7** | Full eval suite + CI/CD | All metrics + regression pipeline |
 | **8** | Production polish | Monitoring dashboards + alerting |
@@ -193,6 +215,8 @@ ARIA is ready to assist!
 **Show the browser — point out the sidebar:**
 - ✅ Backend Connected (version shown)
 - 📄 19 policy chunks indexed (ChromaDB live)
+- 🤖 Agent: Online
+- 🔧 MCP Server: Online
 - Session ID shown — every conversation is tracked
 
 ---
@@ -236,10 +260,9 @@ What was the first thing I asked you?
 What is the parental leave policy?
 ```
 *Point out:*
-- 🔍 Answered from company documents badge — query classified and routed to RAG
+- 🔍 Answered from company documents badge — classified as `rag`, routed to ChromaDB
 - 📄 Sources: Leave Policy, Page 1 — citation appears below answer
 - Specific facts: "Primary caregivers receive 16 weeks of fully paid parental leave"
-- *Compare to Phase 1: would have said "check with your HR manager"*
 
 **Message 2:**
 ```
@@ -251,46 +274,42 @@ How many days of annual leave do I get?
 ```
 How do I report a harassment complaint?
 ```
-*Point out: All 4 grievance steps listed. Source: Code of Conduct, Page 1. This is from a completely different document — the router found the right one.*
+*Point out: All 4 grievance steps listed. Source: Code of Conduct, Page 1. Different document — the router found the right one.*
 
 **Message 4:**
 ```
 What does the company contribute to the 401k?
 ```
-*Point out: "100% of first 3%, 50% of next 3%, vests over 3 years" — Benefits Guide, Page 1. Four different documents, intelligent routing across all of them.*
+*Point out: "100% of first 3%, 50% of next 3%, vests over 3 years" — Benefits Guide, Page 1. Four different documents, intelligent routing across all.*
 
-> *"The key insight: ARIA didn't know any of these specific numbers from training. She retrieved them from your documents at query time, grounded her answer in them, and cited the source. That's Retrieval-Augmented Generation — the most widely deployed AI pattern in enterprise today.*
->
-> *And crucially — we can now measure whether this is working correctly. That's what DeepEval does."*
+> *"The key insight: ARIA didn't know any of these specific numbers from training. She retrieved them from your documents at query time, grounded her answer in them, and cited the source. That's Retrieval-Augmented Generation — and crucially we can now measure whether this is working correctly. That's what DeepEval does."*
 
 ---
 
 ## Demo Section D — Phase 3: Database RAG Demo *(4 minutes)*
 
-> *"Phase 3 gives ARIA a second knowledge source — the live employee database. Watch what happens when you ask questions that are about specific people, not policies. The router now has three paths: document search, database query, or general chat."*
+> *"Phase 3 gives ARIA a second knowledge source — the live employee database. The router now has three paths: document search, database query, or general chat."*
 
-**Type these four messages — pause after each to show the SQL expander:**
+**Type these five messages — pause after each to show the SQL expander:**
 
 **Message 1:**
 ```
 How many leave days does James Chen have?
 ```
 *Point out:*
-- 🗄️ Answered from employee database · 1 record(s) found badge — this did NOT go to documents
-- `View database query` expander — click it and show the SQL
-- The SQL uses `ILIKE` for case-insensitive name matching — GPT-4o generated this from the question
-- Answer is specific: "James Chen has 30 days of leave remaining."
-- *Compare to Phase 2: would have returned "I don't have specific information about that in our company documents"*
+- 🗄️ Answered from employee database · 1 record(s) found badge — classified as `db`
+- `View database query` expander — click and show the SQL
+- GPT-4o generated `ILIKE` name matching from the question
+- Answer: "James Chen has 30 days of leave remaining."
 
 **Message 2:**
 ```
 Who is currently on leave?
 ```
 *Point out:*
-- "Isabella Fernandez is currently on leave." — name only, no role, no department, no location
-- This was explicitly designed: the prompt rules say WHO questions get name + direct answer only
-- Show the SQL — `WHERE e.status = 'On Leave'` — GPT-4o inferred the right column value
-- 1 record returned — this is real-time data from PostgreSQL, not a cached answer
+- "Isabella Fernandez is currently on leave." — name only by design
+- SQL shows `WHERE e.status = 'On Leave'` — GPT-4o inferred the right column value
+- Real-time data from PostgreSQL, not cached
 
 **Message 3:**
 ```
@@ -298,27 +317,23 @@ Who reports to the VP of Engineering?
 ```
 *Point out:*
 - Multi-table JOIN — employees table joined to org_chart table
-- "Priya Sharma and Marcus Johnson report to the VP of Engineering. Both are Directors of Engineering."
-- Show the SQL expander — subquery to find VP's employee_id, then JOIN to find their direct reports
-- The router classified this as `"db"` because it's an org chart question, not a policy question
+- "Priya Sharma and Marcus Johnson report to the VP of Engineering"
+- Show SQL expander — subquery to find VP employee_id then JOIN for direct reports
 
 **Message 4:**
 ```
 How many employees are in each department?
 ```
-*Point out:*
-- Aggregate query with GROUP BY
-- "Engineering: 15, Sales: 10, Finance: 9, HR: 8, Marketing: 8" — total 50 employees
-- Immediately follow with a policy question to show the router switching paths:
+*Point out: Aggregate GROUP BY — "Engineering: 15, Sales: 10, Finance: 9, HR: 8, Marketing: 8"*
 
-**Message 5 (immediate follow-up):**
+**Message 5 (immediate follow-up to show router switching):**
 ```
 What is the parental leave policy?
 ```
 *Point out:*
 - Answer switches to 🔍 Answered from company documents — back to document RAG
 - Source citation reappears: Leave Policy, Page 1
-- SQL expander gone — this answer came from ChromaDB, not PostgreSQL
+- SQL expander gone — came from ChromaDB not PostgreSQL
 - *"Same interface, two completely different knowledge sources. The router makes the decision transparently."*
 
 > *"The SQL expander is a deliberate design choice for enterprise AI. When an AI gives you a number about a specific employee, you want to be able to audit how it got there. The SQL is the audit trail."*
@@ -327,40 +342,28 @@ What is the parental leave policy?
 
 ## Demo Section E — Phase 4: Single HR Advisor Agent *(5 minutes)*
 
-> *"Phase 4 is where ARIA stops following rules and starts reasoning. Instead of a hardcoded router that says 'if policy question → RAG, if employee question → DB', we now have a LangChain ReAct agent that reads the question, decides which tool to use, calls it, reads the result, and decides if it needs more information. This is the first step from retrieval to reasoning."*
+> *"Phase 4 is where ARIA stops following rules and starts reasoning. Instead of a hardcoded router, we now have a LangChain ReAct agent that reads the question, decides which tool to use, calls it, reads the result, and decides if it needs more information."*
 
-**The transformation:**
-```
-Phase 3 — Rule-based routing:
-Router classifies → hardcoded chain executes → answer
-
-Phase 4 — Agent reasoning:
-Agent reads question → thinks → chooses tool → observes result
-→ thinks again → chooses another tool if needed → final answer
-```
-
-**Type these four messages in order — pause after each to show the reasoning trace:**
+**Type these four messages — pause after each to show the reasoning trace:**
 
 **Message 1 — Single tool, policy:**
 ```
 What is the parental leave policy?
 ```
 *Point out:*
-- 🤖 **Agent** badge — this went through the ReAct agent, not the direct RAG chain
-- `📄 search_policies` tool badge appears below the answer
+- 🤖 **Agent** badge — went through the ReAct agent
+- `📄 search_policies` tool badge
 - Click **🧠 Agent Reasoning (1 step)** expander
-- Show Step 1: Tool input `{'query': 'parental leave policy'}` → Observation shows the retrieved policy text
-- *"The agent read the question, decided search_policies was the right tool, called it, got the policy text, and formed its answer. One reasoning step."*
+- Step 1: Tool input `{'query': 'parental leave policy'}` → retrieved policy text
 
 **Message 2 — Single tool, employee:**
 ```
 How many leave days does James Chen have?
 ```
 *Point out:*
-- `👤 lookup_employee` tool badge — agent chose the database tool, not the policy search
-- Click the reasoning expander — Tool input: `{'query': "What is James Chen's leave balance?"}`
-- Observation: "James Chen has a leave balance of 30 days."
-- *"Same agent, different tool. It read 'James Chen' — a person's name — and correctly inferred this was a database question, not a policy question. Zero hardcoded rules. Pure reasoning."*
+- `👤 lookup_employee` tool badge — agent chose the database tool
+- Tool input: `{'query': "What is James Chen's leave balance?"}`
+- *"Zero hardcoded rules. Pure reasoning — it saw a person's name and chose the database tool."*
 
 **Message 3 — Compound query, two tools:**
 ```
@@ -369,29 +372,28 @@ What is the remote work policy and how many days does James Chen have?
 *Point out:*
 - Both `📄 search_policies` AND `👤 lookup_employee` badges appear
 - Click **🧠 Agent Reasoning (2 steps)**
-- Step 1: `search_policies` called with `{'query': 'remote work policy'}` → handbook content returned
-- Step 2: `lookup_employee` called with `{'query': "What is James Chen's leave balance?"}` → "30 days"
-- Final answer combines both sources coherently
-- *"This is the key Phase 4 capability. One question, two knowledge sources, two tool calls, one coherent answer. The router classified this as 'agent' — it knew this question needed both document search and database lookup. Try getting that from a rule-based system."*
+- Step 1: `search_policies` → handbook content
+- Step 2: `lookup_employee` → "30 days"
+- *"One question, two knowledge sources, two tool calls, one coherent answer. This is what the router classified as 'agent'."*
 
 **Message 4 — Broad knowledge base:**
 ```
 What should a new hire know about their first week?
 ```
 *Point out:*
-- `🔍 search_knowledge_base` badge — the broad search tool for cross-cutting questions
-- Answer pulls from onboarding, working hours, buddy programme, IT setup — across multiple handbook sections
-- *"The third tool — search_knowledge_base — is the broad fallback. Not a specific policy clause, not a specific employee. General HR knowledge. The agent chose this without being told."*
+- `🔍 search_knowledge_base` badge — broad cross-cutting search
+- Pulls from onboarding, IT setup, buddy programme across multiple sections
+- *"Three tools. The agent chose each one without being told."*
 
-> *"What you just saw is a ReAct agent — Reason and Act. The agent loops: think about which tool, call the tool, observe the result, think again, call another tool if needed, form the final answer. The reasoning trace in the UI is not cosmetic — it's the actual internal thought process of the agent, captured as it runs. This is the pattern that powers every serious AI agent system in production today."*
+> *"What you just saw is a ReAct agent — Reason and Act. The reasoning trace in the UI is not cosmetic — it's the actual internal thought process of the agent, captured as it runs."*
 
 ---
 
-## Demo Section K — Phase 5: MCP Server — From Answers to Actions *(6 minutes)*
+## Demo Section K — Phase 5: MCP Server — From Answers to Actions *(7 minutes)*
 
-> *"Phase 4 ARIA could tell you things. Phase 5 ARIA can do things. This is the most important capability jump in the platform — and it's built on MCP, Anthropic's open standard for connecting AI agents to external tools.*
+> *"Phase 4 ARIA could tell you things. Phase 5 ARIA can do things — and undo them. This is the most important capability jump in the platform, built on MCP, Anthropic's open standard for connecting AI agents to external tools.*
 >
-> *The difference: Phase 4 tools were baked directly into the agent's code. Phase 5 tools run as a separate server on port 8002. Any MCP-compatible client — Claude Desktop, Cursor, another agent — can call these same tools without touching ARIA's code. That's what makes MCP an enterprise-grade standard, not just a demo trick."*
+> *Phase 4 tools were baked directly into the agent's code. Phase 5 tools run as a separate server on port 8002. Any MCP-compatible client — Claude Desktop, Cursor, another agent — can call these same tools without touching ARIA's code. That's what makes MCP an enterprise-grade standard."*
 
 **Show the MCP server running in Terminal Tab 4:**
 ```
@@ -403,52 +405,55 @@ Tools: check_leave_balance, submit_leave_request, get_org_chart, policy_lookup
 
 **Explain the tool architecture shift:**
 ```
-Phase 4 — 3 tools, baked into the agent:
-  search_policies → ChromaDB (read)
-  lookup_employee → PostgreSQL (read)
+Phase 4 — 3 direct tools (natural language inputs):
+  search_policies       → ChromaDB (read)
+  lookup_employee       → PostgreSQL (read)
   search_knowledge_base → ChromaDB (read)
 
-Phase 5 — adds 4 MCP tools via network service:
-  check_leave_balance → PostgreSQL (read)
+Phase 5 — adds 5 MCP tools via network service (EMP-ID inputs):
+  check_leave_balance  → PostgreSQL (read)
   submit_leave_request → PostgreSQL (WRITE) ← first write in ARIA
-  get_org_chart → PostgreSQL (read, self-join)
-  policy_lookup → ChromaDB (read)
+  cancel_leave_request → PostgreSQL (DELETE) ← first delete in ARIA
+  get_org_chart        → PostgreSQL (read, self-join)
+  policy_lookup        → ChromaDB (read)
 
-Total: 7 tools. 3 direct calls. 4 MCP network calls.
+Total: 8 tools. 3 direct calls. 5 MCP network calls.
 ```
 
-**Type these queries in the Streamlit UI — pause after each:**
+> **Important:** MCP queries use **Employee IDs** (EMP-XXXX format), not names. EMP-ID format → MCP tool. Name format → Phase 4 direct tool. The agent routes based on tool descriptions — no hardcoded rules.
 
-> **Important:** The MCP queries use **Employee IDs** (EMP-XXXX format), not names. This is intentional — the MCP tools are designed for structured, programmatic inputs. The Phase 4 direct tools handle natural name-based lookups. The agent routes correctly based on the question format.
+**Type these five messages — pause after each:**
 
-**Message 1 — MCP read tool, leave balance:**
+**Message 1 — MCP read, leave balance:**
 ```
 Check the leave balance for EMP-0001
 ```
 *Point out:*
+- 🔧 **MCP Action** badge — classified as `mcp` by the five-way router
+- `💰 check_leave_balance` tool badge
 - Answer: "James Chen has 30 days of leave remaining. Status: Active"
-- Tools used: `check_leave_balance` — from the MCP server, not the direct Phase 4 tools
-- *"Same data as before, but now accessed through a network protocol rather than a direct function call. EMP-ID format → MCP tool. Name format → Phase 4 direct tool. The agent decides based on tool descriptions."*
+- *"EMP-ID format → MCP tool. The router and agent both handle this boundary without any hardcoded rules."*
 
-**Message 2 — MCP read tool, org chart:**
+**Message 2 — MCP read, org chart:**
 ```
 Who are the direct reports of EMP-0001?
 ```
 *Point out:*
-- Answer: James Chen's position + Marcus Johnson and Priya Sharma as direct reports
-- Tools used: `get_org_chart` — a self-join across three tables in one MCP call
-- *"One MCP tool call ran two SQL queries — employee info plus direct reports — in a single atomic connection. That's the power of encapsulating business logic in a tool."*
+- `🏢 get_org_chart` tool badge
+- Answer: James Chen, VP Engineering, top level — Marcus Johnson and Priya Sharma as direct reports
+- *"One MCP tool call ran two SQL queries — employee info plus direct reports — sharing a single atomic connection."*
 
-**Message 3 — MCP write tool — the milestone moment:**
+**Message 3 — MCP write — the milestone moment:**
 ```
 Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18
 ```
 *Point out:*
+- `✍️ submit_leave_request` tool badge
+- ✅ "Leave request submitted — record created in database" confirmation banner appears
 - Answer: "Leave request submitted successfully for EMP-0001. Dates: 2027-06-16 to 2027-06-18 (3 days). Type: Annual. Status: Pending. Your manager will be notified for approval."
-- Tools used: `submit_leave_request`
-- *"This is the first time in this entire demo that ARIA wrote to the database. Not retrieved, not answered — acted. A user's natural language instruction just created a new record in PostgreSQL."*
+- *"This is the first time in this entire demo that ARIA wrote to the database. A user's natural language instruction just created a new record in PostgreSQL."*
 
-**Verify the write in the terminal — show the audience:**
+**Verify the write in terminal — show the audience:**
 ```bash
 docker exec -it hr_postgres psql -U hr_user -d hr_platform \
   -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' ORDER BY id DESC LIMIT 3;"
@@ -459,18 +464,39 @@ docker exec -it hr_postgres psql -U hr_user -d hr_platform \
  EMP-0001    | 2027-06-16 | 2027-06-18 | Annual     | Pending
 (1 row)
 ```
-*"There it is. Row in the database. Status: Pending. Manager gets notified. This is what enterprise AI agents need to do — not just answer questions, but complete workflows."*
+*"There it is. Row in the database. Status: Pending."*
 
-**Message 4 — Compound MCP + direct tool:**
+**Message 4 — MCP delete — close the loop:**
+```
+Cancel Annual leave for EMP-0001 starting 2027-06-16
+```
+*Point out:*
+- `🗑️ cancel_leave_request` tool badge
+- Answer: "Leave request cancelled successfully for EMP-0001. Annual leave from 2027-06-16 to 2027-06-18 has been removed. Status was: Pending."
+- *"And now ARIA can undo it. The agent found the pending record, deleted it atomically, and confirmed. Write and delete — the complete leave management lifecycle, from natural language."*
+
+**Verify the delete in terminal:**
+```bash
+docker exec -it hr_postgres psql -U hr_user -d hr_platform \
+  -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' AND start_date = '2027-06-16';"
+```
+```
+ employee_id | start_date | end_date | leave_type | status
+-------------+------------+----------+------------+--------
+(0 rows)
+```
+*"Gone. The agent completed the full workflow: submit, confirm, cancel, confirm. One HR workflow, zero human clicks on a system."*
+
+**Message 5 — Compound MCP + direct tool:**
 ```
 Check leave balance for EMP-0001 and look up the parental leave policy
 ```
 *Point out:*
-- Answer combines MCP balance data + ChromaDB policy text in one response
-- Tools used: `check_leave_balance` (MCP) + `search_policies` (Phase 4 direct)
-- *"The agent called tools from two completely different sources — a network MCP tool and a direct Python function — and combined the results into one coherent answer. This is the 7-tool agent working as designed."*
+- `💰 check_leave_balance` (MCP) AND `📄 search_policies` (Phase 4 direct) badges both appear
+- Answer combines MCP balance data + ChromaDB policy text
+- *"The agent called tools from two completely different sources — a network MCP call and a direct Python function — and combined the results into one coherent answer. This is the 8-tool agent working as designed."*
 
-> *"What you just saw is the transition from a Q&A system to an enterprise AI agent. Phase 4 ARIA was a very good assistant. Phase 5 ARIA can complete HR workflows. The same evaluation framework, the same DeepEval metrics, the same golden set discipline — applied to a system that now modifies database state on behalf of users."*
+> *"What you just saw is the transition from a Q&A system to an enterprise AI agent. Phase 4 ARIA was a very good assistant. Phase 5 ARIA can complete and reverse HR workflows. The same evaluation framework — the same DeepEval metrics, the same golden set discipline — applied to a system that now modifies database state on behalf of users."*
 
 ---
 
@@ -493,7 +519,7 @@ Returns response   →   Returns: score (0.0–1.0) + reasoning
                    →   Pass if score ≥ threshold
 ```
 
-The judge is a separate GPT-4o instance evaluating ARIA's output. It reads the question, ARIA's answer, any retrieved context, and an evaluation rubric — then scores and explains its reasoning. This is more reliable than rule-based checks because it understands nuance, tone, and semantic accuracy.
+The judge is a separate GPT-4o instance evaluating ARIA's output. It reads the question, ARIA's answer, any retrieved context, and an evaluation rubric — then scores and explains its reasoning.
 
 ### Why DeepEval Over Alternatives
 
@@ -523,20 +549,21 @@ PHASE 2 — Document RAG
 ├── ContextualRecallMetric         Does retrieval surface all needed info?
 └── AnswerRelevancyMetric          Regression check from Phase 1
 
-PHASE 3 — Database RAG  (complete)
+PHASE 3 — Database RAG
 ├── FaithfulnessMetric (DB)        Are DB answers grounded in SQL rows returned?
 ├── AnswerRelevancyMetric (DB)     Does the answer address the employee question?
 └── Routing Boundary (assertion)   Do DB questions route 'db', policy questions 'rag'?
 
-PHASE 4 — Single Agent  (complete)
+PHASE 4 — Single Agent
 ├── TaskCompletionMetric           Did the agent complete the full task?
 ├── ToolCorrectnessMetric          Did it choose the right tool(s)?
 └── AnswerRelevancyMetric          Did the answer stay focused and on-point?
 
-PHASE 5 — MCP Tools  (complete)
+PHASE 5 — MCP Tools
 ├── TaskCompletionMetric (MCP)     Did the MCP action complete successfully?
 ├── AnswerRelevancyMetric (MCP)    Is the action response focused and accurate?
 └── Tool Routing (assertion)       Did each question invoke the correct MCP tool?
+                                   Covers all 5 tools across 13 golden set entries.
 
 PHASE 6 — Multi-Agent LangGraph  (planned)
 ├── OrchestratorAccuracyMetric     Correct routing to specialist agents?
@@ -553,7 +580,7 @@ PHASE 8 — Production  (planned)
 
 ## Demo Section G — Phase 1 DeepEval Suite Live *(3 minutes)*
 
-> *"Now I'll run the Phase 1 evaluation suite live. This is 5 test functions, 24 test cases, calling the live ARIA API and having GPT-4o judge every response."*
+> *"Now I'll run the Phase 1 evaluation suite live. 5 test functions, 24 test cases, calling the live ARIA API and having GPT-4o judge every response."*
 
 **Switch to Terminal Tab 3. Run:**
 
@@ -561,12 +588,7 @@ PHASE 8 — Production  (planned)
 uv run deepeval test run evaluation/tests/test_chat.py -v
 ```
 
-**While it runs, narrate:**
-- *"DeepEval is calling ARIA's `/chat/` endpoint for each of the 20 golden set questions"*
-- *"Each response is sent to GPT-4o with an evaluation rubric — you can see the judge model in the output: `gpt-5.4` for GEval, `gpt-4o` for the others"*
-- *"The golden set has 20 entries — 10 standard HR questions and 10 deliberate edge cases including failure scenarios"*
-
-**When results appear — point out:**
+**When results appear:**
 
 ```
 HR Role Adherence [GEval]   avg=0.95   pass=100%   14 cases
@@ -576,18 +598,16 @@ Overall: 24/24 passed
 ```
 
 **Key talking points:**
-- Hallucination score is `0.00` — best possible. ARIA never invents facts
-- Role Adherence `0.95` — occasionally ARIA doesn't re-introduce herself as ARIA mid-conversation. Known gap, addressable with system prompt tuning in Phase 7
+- Hallucination score `0.00` — best possible. ARIA never invents facts
 - Cost: `$0.19` for 24 test cases — cheap enough to run on every pull request
-- Time: ~72 seconds — fast enough for CI/CD
 
 ---
 
 ## Demo Section H — Phase 2 DeepEval Suite Live *(9 minutes)*
 
-> *"Phase 2 introduces four new RAG-specific metrics that don't exist in standard LLM evaluation. These are the metrics that matter for enterprise document AI."*
+> *"Phase 2 introduces four RAG-specific metrics that don't exist in standard LLM evaluation."*
 
-**Run this single script — it handles all 5 tests with the required sleep gaps:**
+**Run as one block:**
 
 ```bash
 echo "=== test_rag_faithfulness ===" && \
@@ -606,53 +626,7 @@ echo "=== test_rag_document_routing ===" && \
 uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_document_routing -v
 ```
 
-**While each test runs, narrate what it measures:**
-
-### test_rag_faithfulness *(~14 seconds)*
-> *"Faithfulness is the most critical RAG metric. It asks: does every factual claim in ARIA's answer trace back to the retrieved document chunks? If ARIA says '25 days annual leave' but the retrieved chunk says '20 days' — that's a faithfulness failure. Score of 1.00 means every claim in every answer was perfectly grounded."*
-
-**Expected result:**
-```
-Faithfulness: avg=1.00, pass=100%, 3 cases
-"No contradictions between actual output and retrieval context"
-```
-
-### test_rag_contextual_precision *(~12 seconds)*
-> *"Contextual precision measures retrieval ranking. The most relevant chunk should always be ranked first. We fixed a bug where 'parental leave' was returning sick leave content as the top result — the parental leave section was merged with sick leave in one chunk. We regenerated the PDFs with better section formatting and reindexed. Now precision is 1.00 — the right chunk is always first."*
-
-**Expected result:**
-```
-Contextual Precision: avg=1.00, pass=100%, 3 cases
-"Relevant node ranked first provides direct answer: 16 weeks fully paid"
-```
-
-### test_rag_contextual_recall *(~9 seconds)*
-> *"Recall measures completeness. Do the retrieved chunks contain everything needed to produce the expected answer? For a multi-step answer like the harassment reporting process — all 4 steps must be in the retrieved context. Score of 1.00 means retrieval is complete."*
-
-**Expected result:**
-```
-Contextual Recall: avg=1.00, pass=100%, 2 cases
-"Every sentence in expected output aligned with retrieval context"
-```
-
-### test_rag_answer_relevancy *(~12 seconds)*
-> *"This metric carries over from Phase 1 as a regression check. RAG answers must remain as relevant as chat answers — we haven't traded relevancy for grounding. Score improved from 0.98 in Phase 1 to 1.00 in Phase 2 because grounded answers are more focused."*
-
-**Expected result:**
-```
-Answer Relevancy: avg=1.00, pass=100%, 3 cases
-"Response perfectly addressed the question without irrelevant information"
-```
-
-### test_rag_document_routing *(~10 seconds)*
-> *"This test has no LLM judge — it's a pure assertion. All 15 policy questions in the golden set must be classified as 'rag' by our query router, not 'chat'. Zero rate limit risk, zero cost. 15/15 correctly routed."*
-
-**Expected result:**
-```
-Document routing: 15/15 classified as "rag" — PASSED
-```
-
-### Final Results Summary
+### Final Phase 2 Results
 
 | Test | Metric | Score | Pass Rate | Cost |
 |---|---|---|---|---|
@@ -663,50 +637,22 @@ Document routing: 15/15 classified as "rag" — PASSED
 | Document Routing | All policy questions → RAG | **100%** | 100% | $0.000 |
 | **Total Phase 2** | | **1.00** | **100%** | **$0.07** |
 
-> *"$0.07 to run the full RAG evaluation suite. $0.19 for the full chat suite. Less than 30 cents to prove an AI system is working correctly. At enterprise scale with CI/CD, you run this on every pull request — it's the quality gate before any change goes to production."*
-
 ---
 
 ## Demo Section I — Phase 3: DeepEval Suite *(5 minutes)*
 
-> *"Phase 3 has four test functions. One runs instantly with no LLM judge — it's a pure routing assertion. Three use GPT-4o as the judge. I'll run the routing test live and walk through the results of the LLM-judged tests."*
-
-### Part 1 — Routing Boundary Test (live, ~15 seconds)
-
-**Run:**
+**Run routing boundary first — no LLM judge, instant:**
 
 ```bash
 uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v
 ```
-
-**While it runs, narrate:**
-- *"This test makes 13 HTTP calls to the `/rag/classify` endpoint — no LLM judge involved, just pure assertions"*
-- *"10 database questions must classify as 'db'. 3 policy questions must classify as 'rag'. If the router regresses and starts sending employee questions to document search, this fails immediately"*
-- *"Zero cost, 13 seconds — this is what you run on every commit as a fast quality gate"*
-
-**When results appear:**
 
 ```
 test_db_routing_boundary PASSED — 13/13 assertions correct
 Cost: $0.00 | Time: ~13s
 ```
 
-**Point out the 13 assertions verified:**
-
-| Category | Count | Example |
-|---|---|---|
-| DB questions → `"db"` | 10 | "How many leave days does James Chen have?" |
-| Policy questions → `"rag"` | 3 | "What is the parental leave policy?" |
-
-> *"The three policy questions in this test are the Phase 2 regression check. Phase 3 added a new routing path — this test verifies it didn't break the Phase 2 document routing. That's the discipline: every new phase proves the previous phase still works."*
-
----
-
-### Part 2 — LLM-Judged Database Tests (walk through results)
-
-> *"The three LLM-judged tests evaluate answer quality. Each gets FaithfulnessMetric and AnswerRelevancyMetric — the same metrics used in Phase 2, but now the retrieval_context is the formatted SQL result instead of document chunks."*
-
-**Run the three tests with sleep gaps:**
+**Run LLM-judged tests with sleep gaps:**
 
 ```bash
 sleep 60 && \
@@ -717,18 +663,7 @@ sleep 60 && \
 uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
 ```
 
-**While each runs, narrate what it tests:**
-
-### test_db_employee_lookup *(~15 seconds)*
-> *"Three questions about specific employees — James Chen's leave balance, his department, and who is currently on leave. Faithfulness asks: does ARIA's answer contain only claims that appear in the database rows returned? If the SQL returns `leave_balance: 30` and ARIA says '30 days' — that's faithful. If ARIA adds '...and he's been with the company for 5 years' when hire date wasn't in the query — that's a faithfulness failure."*
-
-### test_db_aggregate_queries *(~15 seconds)*
-> *"Three aggregate questions — employees per department, active employee count, total leave records. The retrieval context is a GROUP BY result or a COUNT. Faithfulness here means: if the DB says Engineering has 15 employees, ARIA must say 15. Any number other than what the database returned is unfaithful."*
-
-### test_db_join_queries *(~12 seconds)*
-> *"Two JOIN questions — pending leave requests and VP Engineering direct reports. These are the hardest queries: two tables joined. The retrieval context has first_name, last_name, and job_title from the JOIN result. Answer Relevancy checks that ARIA answered the actual question — not just summarized the rows."*
-
-**Final Phase 3 Results:**
+### Final Phase 3 Results
 
 | Test | Metric | Pass Rate | Cases | Cost | Time |
 |---|---|---|---|---|---|
@@ -737,13 +672,11 @@ uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_que
 | Aggregate Queries | Faithfulness + Relevancy | **100%** | 3 | ~$0.030 | ~15s |
 | Join Queries | Faithfulness + Relevancy | **100%** | 2 | ~$0.020 | ~12s |
 
-> *"Phase 3 demonstrates something important: the exact same evaluation framework — DeepEval, FaithfulnessMetric, AnswerRelevancyMetric — works for both document retrieval and database retrieval. We changed what goes into retrieval_context. The evaluation infrastructure didn't change at all. That's the power of a framework-first approach."*
-
 ---
 
 ## Demo Section J — Phase 4: DeepEval Agent Suite *(5 minutes)*
 
-> *"Phase 4 introduces three new DeepEval metrics designed specifically for agents. These are native DeepEval metrics — no custom code. The framework already knows how to evaluate agents."*
+> *"Phase 4 introduces three DeepEval metrics designed specifically for agents."*
 
 **Run the full Phase 4 suite:**
 
@@ -751,21 +684,7 @@ uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_que
 uv run deepeval test run evaluation/tests/test_single_agent.py -v
 ```
 
-**While it runs, narrate the four tests:**
-
-### test_agent_policy_queries *(~15 seconds)*
-> *"Three policy questions — parental leave, remote work policy, probation period. TaskCompletionMetric asks: did the agent fully accomplish what the user asked? ToolCorrectnessMetric verifies search_policies was called. AnswerRelevancyMetric checks the answer stayed focused. All three passed at 100%."*
-
-### test_agent_employee_queries *(~20 seconds)*
-> *"Three employee questions. The key thing here is ToolCorrectnessMetric — did the agent call lookup_employee rather than search_policies? For named employee questions, the agent must use the database tool. Score: 1.00. It never went to the wrong knowledge source."*
-
-### test_agent_compound_queries *(~20 seconds)*
-> *"This is the most important test — three compound questions requiring both tools. TaskCompletionMetric checks the combined answer is complete. ToolCorrectnessMetric verifies BOTH search_policies AND lookup_employee were called. This is what the agent was built for. All three passed."*
-
-### test_agent_tool_correctness_boundary *(~40 seconds)*
-> *"The boundary test runs all 10 golden set entries through ToolCorrectnessMetric only — no LLM judge, pure tool selection verification. 10 questions, 10 correct tool choices. Score: 1.00 across all entries. This is the Phase 4 exit criteria — Tool Correctness ≥ 0.8. We hit 1.00."*
-
-**When results appear — point out:**
+**When results appear:**
 
 ```
 Task Completion     avg=0.95   pass=100%   9 cases
@@ -774,7 +693,7 @@ Answer Relevancy    avg=0.90   pass=100%   9 cases
 Overall: 19/19 passed
 ```
 
-**Final Phase 4 Results:**
+### Final Phase 4 Results
 
 | Test | Metrics | Pass Rate | Cases | Cost | Time |
 |---|---|---|---|---|---|
@@ -784,63 +703,112 @@ Overall: 19/19 passed
 | Tool boundary | ToolCorrectness only | **100%** | 10 | $0.000 | ~40s |
 | **Total Phase 4** | | **100%** | **19** | **$0.073** | **~115s** |
 
-> *"ToolCorrectnessMetric at 1.00 is the headline result. The agent chose the right tool for every single query — policy questions went to search_policies, employee questions went to lookup_employee, compound questions triggered both. That's not luck. That's well-designed tool descriptions and a well-prompted ReAct agent — and now we have a metric that proves it reproducibly."*
-
 ---
 
-## Demo Section L — Phase 5: DeepEval MCP Suite *(4 minutes)*
+## Demo Section L — Phase 5: DeepEval MCP Suite *(5 minutes)*
 
-> *"Phase 5 has four tests — three LLM-judged, one pure boundary assertion. We use TaskCompletionMetric and AnswerRelevancyMetric — the same metrics as Phase 4, now applied to MCP tool calls including the write operation."*
+> *"Phase 5 has five tests — four LLM-judged, one pure boundary assertion. We cover all five MCP tools across 13 golden set entries."*
 
-**Run the boundary test first — no cost, instant:**
+### Golden Set — `evaluation/datasets/mcp_golden_set.json`
+
+13 entries across 4 categories:
+
+| # | Input | Type | Expected Tool |
+|---|---|---|---|
+| 1 | "Check the leave balance for EMP-0001" | read | `check_leave_balance` |
+| 2 | "What is the leave balance for EMP-0022?" | read | `check_leave_balance` |
+| 3 | "What is James Chen's position and who reports to him? Use EMP-0001" | read | `get_org_chart` |
+| 4 | "Who are the direct reports of EMP-0001?" | read | `get_org_chart` |
+| 5 | "Submit Annual leave for EMP-0001 from 2027-01-02 to 2027-01-03" | write | `submit_leave_request` |
+| 6 | "Book Sick leave for EMP-0022 from 2027-01-10 to 2027-01-10" | write | `submit_leave_request` |
+| 7 | "Request Emergency leave for EMP-0001 on 2027-02-14" | write | `submit_leave_request` |
+| 8 | "Cancel Annual leave for EMP-0001 starting 2027-01-02" | cancel | `cancel_leave_request` |
+| 9 | "Delete the Sick leave request for EMP-0022 on 2027-01-10" | cancel | `cancel_leave_request` |
+| 10 | "Withdraw Emergency leave for EMP-0001 starting 2027-02-14" | cancel | `cancel_leave_request` |
+| 11 | "Check leave balance for EMP-0001 and look up the parental leave policy" | multi_step | `check_leave_balance` |
+| 12 | "Get the org chart for EMP-0001 and check their leave balance" | multi_step | `get_org_chart` |
+| 13 | "Submit Annual leave for EMP-0001 from 2027-03-01 to 2027-03-03 and confirm balance" | multi_step | `submit_leave_request` |
+
+> **Run order dependency:** Cancel entries (8–10) depend on write entries (5–7) having created the pending records first. Always run `test_mcp_write_tool` before `test_mcp_cancel_tool`.
+
+**Run the boundary test first — no cost, no LLM judge:**
 
 ```bash
 uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_tool_routing_boundary -v
 ```
 
 *While it runs:*
-> *"This test calls all 10 golden set questions through the live agent and verifies each one invoked the correct MCP tool — no LLM judge, pure assertion. 10 questions × 3-second sleep = 62 seconds. Zero cost."*
+> *"This test calls all 13 golden set questions through the live agent and verifies each one invoked the correct MCP tool. 13 questions × 3-second sleep = ~78 seconds. Zero cost. All five MCP tools are covered — read, write, delete, and multi-step."*
 
 **When results appear:**
 ```
-10/10 entries routed to correct MCP tool — PASSED
-Cost: $0.00 | Time: 62s
+13/13 entries routed to correct MCP tool — PASSED
+Cost: $0.00 | Time: ~78s
 ```
 
-**Now run the LLM-judged tests:**
+**Run the LLM-judged tests in dependency order:**
 
 ```bash
+# 1. Read tools — no dependencies
 uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_read_tools -v
 ```
 
 ### test_mcp_read_tools *(~21 seconds)*
-> *"Three read tool questions — two leave balance checks via EMP-ID, one org chart lookup. TaskCompletionMetric at 0.98, AnswerRelevancy at 1.00. The org chart entry required a specific question about one employee's position — broad questions like 'get the org chart' caused the judge to expect a company-wide org chart. Lesson: golden set specificity matters as much as agent quality."*
+> *"Three read tool questions — two leave balance checks via EMP-ID, one org chart lookup. TaskCompletionMetric at 0.98, AnswerRelevancy at 1.00."*
 
 ```bash
+# 2. Write tool — creates records that cancel tests depend on
 uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_write_tool -v
 ```
 
 ### test_mcp_write_tool *(~21 seconds)*
-> *"Three write operation questions — Annual, Sick, and Emergency leave submissions for two different employees. Both metrics at 1.00 across all three. This is the headline: DeepEval's TaskCompletionMetric correctly recognises that submitting a leave request — an action — was completed, not just described. The judge understood the task was a write operation."*
+> *"Three write operations — Annual, Sick, and Emergency leave submissions for two different employees. Both metrics at 1.00 across all three. TaskCompletionMetric correctly recognises that submitting a leave request was completed, not just described."*
 
 ```bash
+# 3. Cancel tool — must run AFTER write tool (deletes what was submitted above)
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_cancel_tool -v
+```
+
+### test_mcp_cancel_tool *(~21 seconds)*
+> *"Three cancel operations — cancelling the Annual, Sick, and Emergency leave records created in the write test. TaskCompletionMetric evaluates whether the deletion was confirmed correctly. Both write and delete now have LLM judge coverage. Together, write + cancel tests prove the complete leave management lifecycle."*
+
+**Expected results:**
+```
+Task Completion:   avg=1.00  pass=100%  total=3
+Answer Relevancy:  avg=1.00  pass=100%  total=3
+```
+
+```bash
+# 4. Multi-step — independent of write/cancel
 uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
 ```
 
 ### test_mcp_multi_step *(~29 seconds)*
-> *"Three multi-step sequences — balance check plus policy lookup, org chart plus balance, submit leave plus confirm balance. The last one is particularly interesting: the agent submitted a leave request AND then checked the remaining balance in the same reasoning loop. Two MCP tool calls, one coherent answer. Task Completion 0.98, Answer Relevancy 0.95."*
+> *"Three multi-step sequences — balance check plus policy lookup, org chart plus balance, submit leave plus confirm balance. Two MCP tool calls in a single reasoning loop. Task Completion 0.98, Answer Relevancy 0.95."*
 
-**When all results are in — Final Phase 5 Results:**
+**Run the complete Phase 5 suite in correct order:**
+
+```bash
+# Correct run order (cancel depends on write)
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_tool_routing_boundary -v && \
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_read_tools -v && \
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_write_tool -v && \
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_cancel_tool -v && \
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
+```
+
+### Final Phase 5 Results
 
 | Test | Metrics | Avg Score | Pass Rate | Cases | Cost | Time |
 |---|---|---|---|---|---|---|
-| Tool routing boundary | Assertion (no judge) | 100% | **100%** | 10 | $0.000 | 62s |
-| MCP read tools | TaskCompletion + AnswerRelevancy | 0.99 | **100%** | 3 | $0.024 | 21s |
-| MCP write tool | TaskCompletion + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | 21s |
-| MCP multi-step | TaskCompletion + AnswerRelevancy | 0.97 | **100%** | 3 | $0.031 | 29s |
-| **Total Phase 5** | | **0.99** | **100%** | **19** | **$0.080** | **133s** |
+| Tool routing boundary | Assertion (no judge) | 100% | **100%** | 13 | $0.000 | ~78s |
+| MCP read tools | TaskCompletion + AnswerRelevancy | 0.99 | **100%** | 3 | $0.024 | ~21s |
+| MCP write tool | TaskCompletion + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
+| MCP cancel tool | TaskCompletion + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
+| MCP multi-step | TaskCompletion + AnswerRelevancy | 0.97 | **100%** | 3 | $0.031 | ~29s |
+| **Total Phase 5** | | **0.99** | **100%** | **25** | **$0.105** | **~170s** |
 
-> *"$0.08 to evaluate a system that can now write to a production database on behalf of users. That's the ROI of evaluation-first development — you know your agent is working correctly before it goes anywhere near a real HR system."*
+> *"$0.10 to evaluate a system that can write to and delete from a production database on behalf of users. That's the ROI of evaluation-first development."*
 
 ---
 
@@ -891,107 +859,140 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
 | **Use case** | "Is this change safe to deploy?" | "Why did this production call fail?" |
 | **Data sovereignty** | Runs locally or in your VPC | SmithDB self-hosted in Infosys VPC |
 
-**SmithDB's enterprise significance:**
-- Traces contain sensitive employee data, prompt content, and proprietary tool logic
-- SmithDB deploys inside your VPC — three stateless components on object storage and Postgres
-- No sensitive traces leave the Infosys infrastructure boundary
-- Critical for client engagements with data residency requirements
-
-**ClickHouse enables the question every CISO will ask:**
-> *"Show me the hallucination rate trend over the last 6 months across all our AI agents."*
-
-ClickHouse handles the write throughput of continuous metric ingestion and the query performance to answer that question in milliseconds.
-
 ---
 
 ## What This Proves for de.ai *(1 minute)*
 
-> *"Let me close with what this proof of concept demonstrates that is directly transferable to the de.ai platform."*
-
 **1. Evaluation-first architecture works**
-DeepEval was integrated from Phase 0 — not bolted on at the end. Every phase adds metrics before adding features. This is the discipline de.ai needs to build client confidence.
+DeepEval was integrated from Phase 0 — not bolted on at the end. Every phase adds metrics before adding features.
 
 **2. Metric coverage scales with capability**
-Three metrics in Phase 1. Seven in Phase 2. Fourteen across five phases. The framework grows with the system — the same pattern applies through agents, MCP tools, and multi-agent orchestration.
+Three metrics in Phase 1. Seven in Phase 2. Fourteen across five phases. The framework grows with the system.
 
 **3. Cost is not a barrier**
-Under $0.50 total across all five evaluation suites — chat, document RAG, database RAG, agent, and MCP. The routing boundary tests are $0.00 — zero cost to run on every commit. At enterprise scale with 50 agents and daily CI/CD runs, evaluation costs are still a rounding error compared to the cost of a hallucination or a bad write operation reaching a client.
+Under $0.60 total across all five evaluation suites — chat, document RAG, database RAG, agent, and MCP (including cancel). Routing boundary tests are $0.00 — zero cost to run on every commit.
 
 **4. Framework-agnostic design**
 ARIA uses GPT-4o today. Swapping to Claude, Gemini, or a fine-tuned Llama model requires changing two lines in `.env`. The evaluation suite runs unchanged.
 
 **5. Agentic reasoning is measurable**
-Phase 4 demonstrates that agent behaviour — specifically tool selection — is fully measurable with DeepEval's native `ToolCorrectnessMetric`. A 1.00 score across 10 diverse queries proves the ReAct agent consistently reasons to the correct tool without hardcoded rules.
+Phase 4 demonstrates that agent behaviour — specifically tool selection — is fully measurable with `ToolCorrectnessMetric`. 1.00 across 10 diverse queries.
 
-**6. AI agents can perform actions safely**
-Phase 5 demonstrates that an AI agent can write to a production database — `submit_leave_request` inserts records into PostgreSQL — and DeepEval's `TaskCompletionMetric` correctly evaluates whether the action was completed. `1.00` across all 3 write test cases. The same evaluation framework that validates answers also validates actions.
+**6. AI agents can perform and reverse actions safely**
+Phase 5 demonstrates that an AI agent can write to a production database (`submit_leave_request`) and delete from it (`cancel_leave_request`). DeepEval's `TaskCompletionMetric` correctly evaluates whether both operations completed. 1.00 across all 6 write and cancel test cases. The same evaluation framework that validates answers also validates actions and reversals.
 
 **7. MCP is the enterprise integration standard**
-The Phase 5 MCP server runs independently of the agent — any MCP-compatible client (Claude Desktop, Cursor, future ARIA versions) can call the same tools without code changes. This is the architecture pattern de.ai needs for enterprise tool integration at scale.
+The Phase 5 MCP server runs independently of the agent — any MCP-compatible client can call the same tools without code changes.
 
 **8. Hybrid knowledge architecture is production-ready**
-Phases 3–5 together demonstrate that a single AI assistant can transparently switch between document retrieval (ChromaDB), database querying (PostgreSQL), network tool calls (MCP server), and database writes — based on the nature of the question. Enterprise HR systems always have both structured data and unstructured documents — ARIA handles all of it.
+Phases 3–5 together: a single assistant that transparently switches between document retrieval (ChromaDB), database querying (PostgreSQL), network MCP tool calls (port 8002), database writes, and database deletes — based on the nature of the question.
 
 **9. Data sovereignty is solved**
-SmithDB's self-hosted VPC deployment means no sensitive AI traces leave the Infosys infrastructure boundary — a non-negotiable requirement for enterprise financial, healthcare, and government clients.
+SmithDB's self-hosted VPC deployment means no sensitive AI traces leave the Infosys infrastructure boundary.
 
 ---
 
 ## If the Principal Architect Wants to Go Deeper
 
-*Additional technical detail available on request:*
-
 ### The ReAct Agent Pattern — Why Tool Descriptions Are Everything
-The ReAct agent selects tools based entirely on their docstring descriptions — not hardcoded rules. The `lookup_employee` tool description explicitly states "Always use this tool when the question mentions a person by name." The `search_policies` description says "Do NOT use this tool if the question mentions a specific employee by name." These two rules alone produce correct tool selection across all employee vs policy questions. The lesson: in agentic systems, prompt engineering moves from the system prompt to the tool description. Getting tool descriptions precisely right is the critical engineering task — `ToolCorrectnessMetric` is the quality gate that confirms they're working.
+The ReAct agent selects tools based entirely on their docstring descriptions — not hardcoded rules. The `lookup_employee` tool description explicitly states "Always use this tool when the question mentions a person by name." The `check_leave_balance` description says "employee_id must be in format EMP-XXXX." These two rules alone produce correct tool routing: names → Phase 4 direct tools, EMP-IDs → Phase 5 MCP tools. Tool description engineering is the critical work — `ToolCorrectnessMetric` is the quality gate.
 
-### The Four-Way Router Upgrade
-The Phase 3 three-way router (`rag` / `db` / `chat`) was extended to four-way by adding a single classification rule: if a question requires retrieving from BOTH policy documents AND the employee database to fully answer — classify as `"agent"`. Single-source questions remain `"rag"` or `"db"`. This means compound questions like "What is the leave policy and how many days does James have?" route to the agent, while simple questions bypass it entirely — keeping the faster direct chains for single-domain queries.
+### The Five-Way Router
+The five-way router adds `"mcp"` as the **highest priority** classification — any question containing an EMP-XXXX ID, or using an explicit action verb (submit, book, request, cancel, delete, withdraw), routes to MCP before any other classification is considered. This prevents EMP-ID questions from falling through to `"db"` (which uses name-based NL-to-SQL) and ensures write/delete actions always go through the validated MCP tool layer.
 
-### Why `max_iterations=5` Matters
-The `AgentExecutor` is capped at 5 reasoning iterations. Without this, a confused agent could loop indefinitely burning API credits. 5 iterations is sufficient for the most complex compound question (policy lookup + employee lookup + reasoning), while providing a hard safety ceiling. In production, this ceiling should be logged as a metric — hitting max_iterations signals either a poorly formed question or a tool failure that needs investigation.
+### Why `cancel_leave_request` Uses IN({placeholders}) Not ANY(:ids)
+`cancel_leave_request` fetches all pending records matching the employee/date, then deletes them all in one statement. SQLAlchemy's `text()` layer does not bind Python lists correctly to PostgreSQL's `ANY(:ids)` operator — it transmits only the first element. The correct pattern is to build explicit named parameters (`id_0`, `id_1`, ...) and a matching `IN (:id_0, :id_1, ...)` clause. Both the SELECT and DELETE run inside one `engine.begin()` transaction — atomic read + delete with auto-commit on success.
+
+### The Duplicate Guard in submit_leave_request
+After Phase 5 testing, a duplicate check was added to `submit_leave_request`: if a pending record already exists for the same employee and start date, the tool returns an informative error rather than inserting a duplicate. This means DeepEval write tests can only run once per database state — to re-run, either cancel the records first (using `cancel_leave_request`) or reset the database. The golden set is designed accordingly: write entries (5–7) use dates in 2027-01, cancel entries (8–10) cancel those same records.
 
 ### Why Two Separate Tool Sets Coexist (Phase 4 direct + Phase 5 MCP)
-The Phase 4 tools accept natural language inputs — names, questions, phrases. They are optimised for retrieval. The Phase 5 MCP tools accept structured inputs — EMP-IDs, date strings in YYYY-MM-DD format, leave type enums. They are optimised for actions. The agent's tool descriptions create a natural routing boundary: questions mentioning a person's name go to `lookup_employee` (direct); questions using EMP-ID format go to `check_leave_balance` (MCP). No hardcoded routing rules — the LLM reads the tool descriptions and decides. This is the correct design pattern for multi-tool agents.
+Phase 4 tools accept natural language — names, questions, phrases. Phase 5 MCP tools accept structured inputs — EMP-IDs, YYYY-MM-DD dates, leave type enums. The agent's tool descriptions create a natural routing boundary without hardcoded rules. This is the correct design: two tool layers with distinct input contracts serving distinct user intents.
 
 ### Why FastMCP 3.x Cannot Be Verified with curl
-FastMCP 3.x uses Streamable HTTP transport, which requires a session ID established through an MCP handshake before any tool calls can be made. Raw curl skips the handshake and fails with "Missing session ID". The correct approach is the `fastmcp.Client` Python context manager — it handles the handshake transparently. This is a FastMCP 3.x design decision to enforce protocol compliance over raw HTTP convenience.
+FastMCP 3.x uses Streamable HTTP transport, which requires a session ID established through an MCP handshake. Raw curl skips the handshake and fails with "Missing session ID". Use the `fastmcp.Client` Python context manager — it handles the handshake transparently.
 
-### The First Database Write — Why It Matters Architecturally
-Every system before Phase 5 was read-only. `submit_leave_request` is the first mutation — it inserts a new row into `leave_records` with `status='Pending'`. The transaction uses `engine.begin()` (SQLAlchemy's context manager for atomic writes) which auto-commits on success and auto-rolls back on any exception. The employee existence check and the insert share one connection — if the employee check fails, no partial insert occurs. This is the correct pattern for all AI-initiated write operations: validate first, write atomically, confirm explicitly.
-
-### Chunk boundary debugging — The Parental Leave Story
-The parental leave policy section was initially being merged with the sick leave section in one 800-character chunk. The chunk's vector was dominated by sick leave content, causing parental leave queries to return the wrong top result. Diagnosed by inspecting all ChromaDB chunks directly, fixed by regenerating PDFs with explicit `\n\n` section separators and reindexing. Contextual Precision metric caught this — scored correctly at 1.00 after fix. This is a real production RAG debugging workflow.
-
-### LLM-as-Judge Reliability
-DeepEval's GEval metric used `gpt-5.4` as judge (DeepEval auto-selects latest available). The payroll question scored `0.67` in Run 1 and `0.80` in Run 2 — same question, same ARIA response, different judge score. Non-determinism in the evaluator is a known property. Mitigation: run evaluations multiple times and track trends, not individual scores. Phase 7 implements 3-run averaging for all critical metrics.
-
-### Rate Limit Architecture
-At 30,000 TPM limit on the free OpenAI tier, running 15 concurrent judge calls hits the ceiling. Solution: 60-second gaps between test functions, 3 test cases maximum per LLM-judged function. At production tier (150,000+ TPM), the full 15-case suite runs in a single pass in under 2 minutes. Architecture is the same — only the concurrency limit changes.
-
-### sys.path Fix for Test Isolation
-DeepEval test files in `evaluation/tests/` need project root on Python path to import from `rag.*` and `backend.*`. Fixed with:
-```python
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)
-))))
-```
-This pattern is standard for monorepo pytest configurations.
-
-### The WHO Prompt Iteration — Database Answer Verbosity
-"Who is currently on leave?" initially returned "Isabella Fernandez, who is an HR Coordinator in the HR department, is on leave. She is based in our Singapore office." — accurate but unrequested detail. Three iterations were needed: first adding a WHO rule, then making it the first rule in the system prompt with explicit correct/wrong examples. The final rule: for WHO questions, respond with ONLY the person's name and the direct answer — no role, no department, no location unless explicitly asked. This is a production concern: enterprise HR chatbots that volunteer PII beyond what was asked create compliance exposure.
-
-### The NOT_DB_QUERY Sentinel Pattern
-When the NL-to-SQL model cannot answer a question from the database (e.g., "What is the annual leave policy?"), it returns the literal string `NOT_DB_QUERY` instead of SQL. This sentinel travels through the entire stack: the chain returns it, the API endpoint returns a fallback message, the streaming endpoint emits it as a token, and Streamlit catches it to set `last_answer_type = "rag_fallback"`. The sentinel pattern avoids exception handling for expected cases and keeps the code path explicit at every layer.
+### The First Database Write and Delete — Why It Matters Architecturally
+`submit_leave_request` is the first mutation — it inserts into `leave_records` with `status='Pending'`. `cancel_leave_request` is the first deletion — it removes pending rows atomically. Both use `engine.begin()` — auto-commits on success, auto-rolls back on exception. The employee existence check and the insert share one connection — validate first, write atomically, confirm explicitly. This is the pattern for all AI-initiated mutations: no partial writes.
 
 ### SQL Safety Validation
-Every SQL string generated by GPT-4o passes through `validate_sql()` before execution. Two checks: the statement must begin with `SELECT` (lowercased, stripped), and it must not contain dangerous keywords (`DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `CREATE`, `GRANT`, `REVOKE`) detected via word-boundary regex. This is defense-in-depth: the NL-to-SQL prompt already instructs SELECT-only, but the validator provides a hard gate regardless of prompt compliance. This is the correct pattern for any AI system that generates executable code or queries.
+Every SQL string generated by GPT-4o passes through `validate_sql()` before execution — must begin with `SELECT`, must not contain `DROP`, `DELETE`, `UPDATE`, `INSERT`, `ALTER`, `TRUNCATE`, `CREATE`, `GRANT`, `REVOKE`. The MCP tools bypass this validator because they use parameterised `text()` queries directly, not GPT-4o-generated SQL — they are safe by construction.
 
-### Double Call in /rag/db/stream
-The `/rag/db/stream` endpoint runs `db_rag_query_stream()` for the streaming tokens, then calls `db_rag_query()` a second time to get the SQL and row count for the metadata SSE event. This is an acknowledged double call — the same pattern as Phase 2's `/rag/stream`. The alternative (threading metadata through the async generator) adds complexity for ~0.5s overhead. Phase 7 refactors this with a wrapper that captures metadata from the first call and passes it through to the metadata event.
+---
 
-### Trailing Slash Convention
-FastAPI routes `POST /chat/` with trailing slash. `httpx` (and browsers) don't follow redirects on POST — so Streamlit must call `/chat/` not `/chat`. This is a FastAPI architectural decision to canonicalize routes. All internal callers use trailing slash consistently.
+## Quick Reference — All Streamlit Queries by Route
+
+### 💬 Chat Route (casual / off-topic → `chat`)
+```
+Hello ARIA, what can you help me with?
+Can you help me write a Python script to sort a list?
+What was the first thing I asked you?
+What is human resources?
+```
+
+### 🔍 Document RAG Route (policy questions → `rag`)
+```
+What is the parental leave policy?
+How many days of annual leave do I get?
+How do I report a harassment complaint?
+What does the company contribute to the 401k?
+What is the remote work policy?
+What is the probation period notice?
+What are the working hours at Acme Corp?
+```
+
+### 🗄️ Database RAG Route (named employee data → `db`)
+```
+How many leave days does James Chen have?
+Who is currently on leave?
+Who reports to the VP of Engineering?
+How many employees are in each department?
+How many employees are in Engineering?
+Who is in the HR department?
+How many leave records are pending?
+```
+
+### 🤖 Agent Route (compound: policy + named employee → `agent`)
+```
+What is the remote work policy and how many days does James Chen have?
+Tell me about parental leave and how much leave does Isabella Fernandez have?
+What is the annual leave entitlement and who is currently on leave?
+What is the leave policy and what is Sarah's department?
+```
+
+### 🔧 MCP Route (EMP-ID queries and action requests → `mcp`)
+
+**Read tools:**
+```
+Check the leave balance for EMP-0001
+What is the leave balance for EMP-0022?
+Who are the direct reports of EMP-0001?
+Get the org chart for EMP-0001
+What is James Chen's position and who reports to him? Use employee ID EMP-0001
+```
+
+**Write tool:**
+```
+Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18
+Book Sick leave for EMP-0022 from 2027-07-01 to 2027-07-01
+Request Emergency leave for EMP-0001 on 2027-08-15
+Submit Parental leave for EMP-0001 from 2027-09-01 to 2027-10-31
+```
+
+**Cancel tool:**
+```
+Cancel Annual leave for EMP-0001 starting 2027-06-16
+Delete the pending Sick leave for EMP-0022 on 2027-07-01
+Withdraw Emergency leave for EMP-0001 starting 2027-08-15
+Cancel my leave request for EMP-0001 on 2027-06-16
+```
+
+**Multi-step MCP + direct:**
+```
+Check leave balance for EMP-0001 and look up the parental leave policy
+Get the org chart for EMP-0001 and check their leave balance
+Submit Annual leave for EMP-0001 from 2027-09-01 to 2027-09-03 and confirm balance
+```
 
 ---
 
@@ -1003,11 +1004,14 @@ docker compose up -d                    # Start PostgreSQL + ChromaDB
 docker compose ps                       # Verify both healthy
 
 # === APPLICATION ===
-# Tab 1:
+# Tab 1 — FastAPI:
 uv run uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 
-# Tab 2:
+# Tab 2 — Streamlit:
 uv run streamlit run frontend/app.py --server.port 8501
+
+# Tab 4 — MCP Server (keep running throughout demo):
+uv run python scripts/start_mcp_server.py
 
 # Browser:
 open http://localhost:8501
@@ -1018,14 +1022,26 @@ curl http://localhost:8000/health
 curl http://localhost:8000/rag/status
 curl http://localhost:8000/chat/stats
 
-# === CLASSIFICATION TEST — two-way and three-way ===
+# === FIVE-WAY ROUTER TESTS ===
 curl "http://localhost:8000/rag/classify?query=What+is+the+parental+leave+policy"
 # Expected: {"classification": "rag"}
 
 curl "http://localhost:8000/rag/classify?query=How+many+leave+days+does+James+Chen+have"
 # Expected: {"classification": "db"}
 
-# === DB RAG ENDPOINT TEST ===
+curl "http://localhost:8000/rag/classify?query=What+is+the+leave+policy+and+how+many+days+does+James+Chen+have"
+# Expected: {"classification": "agent"}
+
+curl "http://localhost:8000/rag/classify?query=Check+the+leave+balance+for+EMP-0001"
+# Expected: {"classification": "mcp"}
+
+curl "http://localhost:8000/rag/classify?query=Cancel+Annual+leave+for+EMP-0001+starting+2027-06-16"
+# Expected: {"classification": "mcp"}
+
+curl "http://localhost:8000/rag/classify?query=Submit+Annual+leave+for+EMP-0001+from+2027-06-16+to+2027-06-18"
+# Expected: {"classification": "mcp"}
+
+# === DB RAG ENDPOINT TESTS ===
 curl -s -X POST http://localhost:8000/rag/db/query \
   -H "Content-Type: application/json" \
   -d '{"question": "How many leave days does James Chen have?"}' | python3 -m json.tool
@@ -1034,50 +1050,30 @@ curl -s -X POST http://localhost:8000/rag/db/query \
   -H "Content-Type: application/json" \
   -d '{"question": "Who is currently on leave?"}' | python3 -m json.tool
 
-# === DEEPEVAL ENV VARS ===
-export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
-export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
+# === AGENT ENDPOINT TESTS ===
+curl -s -X POST http://localhost:8000/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the parental leave policy?"}' | python3 -m json.tool
 
-# === PHASE 1 EVALS ===
-uv run deepeval test run evaluation/tests/test_chat.py -v
+curl -s -X POST http://localhost:8000/agent/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the remote work policy and how many days does James Chen have?"}' | python3 -m json.tool
 
-# === PHASE 2 EVALS (run as one block) ===
-uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_faithfulness -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_precision -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_recall -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_answer_relevancy -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_document_routing -v
+# === MCP ENDPOINT TESTS ===
+curl -s -X POST http://localhost:8000/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Check the leave balance for EMP-0001"}' | python3 -m json.tool
 
-# === PHASE 3 EVALS ===
-# Routing boundary first (fast, no LLM judge — run before anything else)
-uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v
+curl -s -X POST http://localhost:8000/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18"}' | python3 -m json.tool
 
-# LLM-judged tests with sleep gaps
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_employee_lookup -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregate_queries -v && \
-sleep 60 && \
-uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
+curl -s -X POST http://localhost:8000/mcp/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Cancel Annual leave for EMP-0001 starting 2027-06-16"}' | python3 -m json.tool
 
-# === PHASE 4 EVALS ===
-uv run deepeval test run evaluation/tests/test_single_agent.py -v
-
-# Run individual Phase 4 tests
-uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_policy_queries -v
-uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_employee_queries -v
-uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_compound_queries -v
-uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_tool_correctness_boundary -v
-
-# === MCP SERVER ===
-# Tab 4 — start MCP server (keep running throughout demo)
-uv run python scripts/start_mcp_server.py
-
-# Verify MCP tools (FastMCP Python client — curl won't work for MCP 3.x)
+# === MCP SERVER DIRECT TOOL VERIFICATION ===
+# List all registered tools (5 expected)
 uv run python -c "
 import asyncio
 from fastmcp import Client
@@ -1087,8 +1083,10 @@ async def check():
         print([t.name for t in tools])
 asyncio.run(check())
 "
+# Expected: ['check_leave_balance', 'submit_leave_request', 'cancel_leave_request',
+#            'get_org_chart', 'policy_lookup']
 
-# Test MCP tools directly
+# Test check_leave_balance
 uv run python -c "
 import asyncio
 from fastmcp import Client
@@ -1099,7 +1097,7 @@ async def test():
 asyncio.run(test())
 "
 
-# Verify MCP write (submit leave request)
+# Test submit_leave_request (WRITE)
 uv run python -c "
 import asyncio
 from fastmcp import Client
@@ -1112,63 +1110,99 @@ async def test():
 asyncio.run(test())
 "
 
-# Verify write in database
+# Test cancel_leave_request (DELETE)
+uv run python -c "
+import asyncio
+from fastmcp import Client
+async def test():
+    async with Client('http://localhost:8002/mcp') as c:
+        r = await c.call_tool('cancel_leave_request', {
+            'employee_id': 'EMP-0001', 'start_date': '2027-06-16',
+            'leave_type': 'Annual'})
+        print(r.data)
+asyncio.run(test())
+"
+
+# Test get_org_chart
+uv run python -c "
+import asyncio
+from fastmcp import Client
+async def test():
+    async with Client('http://localhost:8002/mcp') as c:
+        r = await c.call_tool('get_org_chart', {'employee_id': 'EMP-0001'})
+        print(r.data)
+asyncio.run(test())
+"
+
+# Test policy_lookup
+uv run python -c "
+import asyncio
+from fastmcp import Client
+async def test():
+    async with Client('http://localhost:8002/mcp') as c:
+        r = await c.call_tool('policy_lookup', {'query': 'parental leave entitlement'})
+        print(str(r.data)[:300])
+asyncio.run(test())
+"
+
+# === DATABASE VERIFICATION ===
+# Verify write
 docker exec -it hr_postgres psql -U hr_user -d hr_platform \
-  -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' ORDER BY id DESC LIMIT 3;"
+  -c "SELECT employee_id, start_date, end_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' ORDER BY id DESC LIMIT 5;"
 
-# === PHASE 5 EVALS ===
-# Boundary test first — no LLM judge, no cost
-uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_tool_routing_boundary -v
+# Verify cancel (row should be gone)
+docker exec -it hr_postgres psql -U hr_user -d hr_platform \
+  -c "SELECT employee_id, start_date, leave_type, status FROM leave_records WHERE employee_id = 'EMP-0001' AND start_date = '2027-06-16';"
 
-# LLM-judged tests
-uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_read_tools -v
-uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_write_tool -v
-uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
-
-# Or full Phase 5 suite
-uv run deepeval test run evaluation/tests/test_mcp.py -v
-
-# === STREAMLIT MCP QUERIES (type these in the chat UI) ===
-# Read tools — use EMP-ID format:
-#   "Check the leave balance for EMP-0001"
-#   "What is the leave balance for EMP-0022?"
-#   "Who are the direct reports of EMP-0001?"
-#   "Get the org chart for EMP-0001"
-# Write tool:
-#   "Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18"
-#   "Book Sick leave for EMP-0022 from 2027-07-01 to 2027-07-01"
-#   "Request Emergency leave for EMP-0001 on 2027-08-15"
-# Multi-step:
-#   "Check leave balance for EMP-0001 and look up the parental leave policy"
-#   "Get the org chart for EMP-0001 and check their leave balance"
-#   "Submit Annual leave for EMP-0001 from 2027-09-01 to 2027-09-03 and confirm balance"
-
-# === AGENT ENDPOINT TEST ===
-curl -s -X POST http://localhost:8000/agent/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is the parental leave policy?"}' | python3 -m json.tool
-
-curl -s -X POST http://localhost:8000/agent/query \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What is the remote work policy and how many days does James Chen have?"}' | python3 -m json.tool
-
-# === FOUR-WAY ROUTER TEST ===
-curl "http://localhost:8000/rag/classify?query=What+is+the+parental+leave+policy"
-# Expected: {"classification": "rag"}
-
-curl "http://localhost:8000/rag/classify?query=How+many+days+does+James+Chen+have"
-# Expected: {"classification": "db"}
-
-curl "http://localhost:8000/rag/classify?query=What+is+the+leave+policy+and+how+many+days+does+James+Chen+have"
-# Expected: {"classification": "agent"}
-
-# === DATABASE VERIFY ===
+# Count records
 docker exec -it hr_postgres psql -U postgres -d hr_platform \
   -c "SELECT COUNT(*) FROM employees;"            # Expected: 50
 docker exec -it hr_postgres psql -U postgres -d hr_platform \
-  -c "SELECT COUNT(*) FROM leave_records;"        # Expected: 30
+  -c "SELECT COUNT(*) FROM leave_records;"        # varies with test runs
 docker exec -it hr_postgres psql -U postgres -d hr_platform \
   -c "SELECT employee_id, first_name, last_name, leave_balance FROM employees WHERE first_name = 'James' AND last_name = 'Chen';"
+
+# === DEEPEVAL ENV VARS ===
+export DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE=600
+export DEEPEVAL_PER_ATTEMPT_TIMEOUT_SECONDS_OVERRIDE=300
+
+# === PHASE 1 EVALS ===
+uv run deepeval test run evaluation/tests/test_chat.py -v
+
+# === PHASE 2 EVALS ===
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_faithfulness -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_precision -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_contextual_recall -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_answer_relevancy -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_document_rag.py::test_rag_document_routing -v
+
+# === PHASE 3 EVALS ===
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_routing_boundary -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_employee_lookup -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_aggregate_queries -v && \
+sleep 60 && \
+uv run deepeval test run evaluation/tests/test_database_rag.py::test_db_join_queries -v
+
+# === PHASE 4 EVALS ===
+uv run deepeval test run evaluation/tests/test_single_agent.py -v
+# Individual:
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_policy_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_employee_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_compound_queries -v
+uv run deepeval test run evaluation/tests/test_single_agent.py::test_agent_tool_correctness_boundary -v
+
+# === PHASE 5 EVALS (run in order — cancel depends on write) ===
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_tool_routing_boundary -v
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_read_tools -v
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_write_tool -v
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_cancel_tool -v
+uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
 ```
 
 ---
@@ -1180,29 +1214,35 @@ docker exec -it hr_postgres psql -U postgres -d hr_platform \
 | Streamlit shows "Backend Offline" | Run Tab 1 uvicorn command |
 | Sidebar shows "Document search unavailable" | `curl http://localhost:8001/api/v2/heartbeat` — restart Docker if needed |
 | Sidebar shows "🤖 Agent: Offline" | Check `/agent/query` endpoint — restart FastAPI |
+| Sidebar shows "🔧 MCP Server: Offline" | Restart `scripts/start_mcp_server.py` in Tab 4 |
 | DB answer not showing SQL expander | Check that `/rag/db/stream` is sending `sql_used` in the metadata event |
-| `/rag/classify` returns `"chat"` for a DB question | Check that `rag_router.py` has four-way router — not the Phase 3 three-way version |
+| `/rag/classify` returns `"chat"` for a DB question | Check that `rag_router.py` has five-way router — not an older three or four-way version |
+| `/rag/classify` returns `"db"` for EMP-ID question | Five-way router not updated — `"mcp"` classification must be first in the prompt |
 | `/rag/classify` returns `"db"` for compound question | Four-way router not updated — check `rag_router.py` for `"agent"` classification |
+| `/rag/classify` returns wrong type for cancel query | Check cancel example phrases in `rag_router.py` — cancel/delete/withdraw must be listed |
 | `/agent/query` returns 500 | Check `agents/single/hr_advisor.py` — must use `from langchain.agents import create_agent` |
 | Agent reasoning trace not showing | LangGraph 1.2.0 pattern — tool calls in `msg.tool_calls`, not `intermediate_steps` |
-| Agent uses wrong tool | Tool description mismatch — check `agents/single/tools.py` tool descriptions |
+| Agent uses wrong tool | Tool description mismatch — check `agents/single/tools.py` descriptions |
 | DeepEval `ToolCorrectnessMetric` fails | Check `tools_called` is populated from `result["tools_used"]` in `build_test_case()` |
 | MCP server not starting | Check `uv run python scripts/start_mcp_server.py` — must be run from project root |
+| MCP server shows only 4 tools | `cancel_leave_request` not imported — check `mcp_server/tools/leave_tool.py` and `mcp_server/server.py` imports |
 | MCP tools return 0 / no data | MCP server started but tool imports failed — check Tab 4 terminal for import errors |
-| `curl` against port 8002 fails | Expected — FastMCP 3.x requires session handshake. Use `fastmcp.Client` in Python instead |
+| `curl` against port 8002 fails | Expected — FastMCP 3.x requires session handshake. Use `fastmcp.Client` in Python |
 | MCP `check_leave_balance` returns "No employee found" | Verify EMP-ID format: must be `EMP-0001` not `EMP-1` or `emp-0001` |
-| `submit_leave_request` fails with "Employee not found" | Employee ID doesn't exist in DB — verify with `SELECT employee_id FROM employees LIMIT 5` |
-| `submit_leave_request` fails with date error | Dates must be `YYYY-MM-DD` format and end_date >= start_date |
+| `submit_leave_request` fails with "Employee not found" | Employee ID doesn't exist — verify with `SELECT employee_id FROM employees LIMIT 5` |
+| `submit_leave_request` fails with date error | Dates must be `YYYY-MM-DD` and end_date >= start_date |
+| `submit_leave_request` returns "A pending request already exists" | Duplicate guard triggered — cancel the existing record first or use a different start date |
+| `cancel_leave_request` returns "No pending leave request found" | No pending record exists for that employee/date — run submit_leave_request first |
+| `cancel_leave_request` deletes only 1 of multiple duplicates | Should use the IN clause version — check that `engine.begin()` is used for both SELECT and DELETE |
+| DeepEval MCP cancel tests fail | Ensure write tests ran first in the same session to create the pending records |
 | DeepEval MCP tests fail with "MCP server offline" | Restart `scripts/start_mcp_server.py` in Tab 4 before running MCP tests |
 | DeepEval MCP 429 rate limit | Each MCP test has 3s sleep built in — if still hitting limits wait 60s between test functions |
-| `/rag/db/query` returns 500 | Restart FastAPI — check that `from rag.database_rag.chain import db_rag_query` import is present in `routes/rag.py` |
-| DB answer returns `NOT_DB_QUERY` text in UI | Question was misclassified as `"db"` but GPT-4o returned NOT_DB_QUERY — question is policy-related, not a DB question |
 | DeepEval 429 rate limit error | Wait 60 seconds, re-run the specific test function |
-| DeepEval timeout error | Verify env vars set: `echo $DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE` |
+| DeepEval timeout error | Verify env vars: `echo $DEEPEVAL_PER_TASK_TIMEOUT_SECONDS_OVERRIDE` |
 | `/rag/classify` returns 500 | Restart FastAPI — likely import error on startup |
 | Chat not streaming | Check trailing slash: must call `/chat/` not `/chat` |
 | Parental leave returns wrong answer | Re-run indexer: `uv run python -m vector_store.indexer` |
-| PostgreSQL connection error | Run `docker compose ps` — verify `hr_postgres` is healthy. Use `hr_user` not `postgres` as the DB user |
+| PostgreSQL connection error | Run `docker compose ps` — verify `hr_postgres` is healthy. Use `hr_user` not `postgres` as DB user |
 
 ---
 
