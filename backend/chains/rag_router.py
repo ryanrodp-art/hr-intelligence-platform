@@ -7,7 +7,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 ROUTER_PROMPT = """You are a query classifier for an HR assistant system.
-Classify the user's question as 'agent', 'rag', 'db', or 'chat'.
+Classify the user's question as 'mcp', 'agent', 'rag', 'db', or 'chat'.
+
+Return 'mcp' if the question:
+- Contains an employee ID in EMP-XXXX format (e.g. EMP-0001, EMP-0022)
+- Is an explicit action request to submit, book, request, or cancel leave
+- Is an org chart or reporting-structure lookup by employee ID
+Examples:
+  "Check the leave balance for EMP-0001"
+  "Submit Annual leave for EMP-0001 from 2027-06-16 to 2027-06-18"
+  "Book Sick leave for EMP-0022 from 2027-07-01 to 2027-07-01"
+  "Who are the direct reports of EMP-0001?"
+  "Get the org chart for EMP-0001"
+  "What is the leave balance for EMP-0022?"
+  "Request Emergency leave for EMP-0001 on 2027-08-15"
+  "Cancel my leave request for EMP-0001 on 2027-09-01"
+  "Delete the pending leave for EMP-0001 from 2027-09-01"
+  "Withdraw leave request for EMP-0001 starting 2027-09-01"
+  "Cancel Annual leave for EMP-0001 from 2027-09-01"
 
 Return 'agent' if the question REQUIRES BOTH:
 - A policy or document lookup (general rules, entitlements, procedures)
@@ -46,10 +63,12 @@ Return 'chat' if the question:
 - Is a follow-up that continues a general conversation
 - Cannot be answered from documents OR the employee database
 
-IMPORTANT: Classify as 'agent' before 'db' — if the question needs
-BOTH a policy document AND a named employee lookup, always return 'agent'.
+IMPORTANT: Classify as 'mcp' first — any question with an EMP-XXXX ID or
+an explicit leave action verb takes priority over all other categories.
+Classify as 'agent' before 'db' — if the question needs BOTH a policy
+document AND a named employee lookup, always return 'agent'.
 
-Return ONLY the word 'agent', 'rag', 'db', or 'chat' — nothing else."""
+Return ONLY the word 'mcp', 'agent', 'rag', 'db', or 'chat' — nothing else."""
 
 
 async def classify_query(question: str) -> str:
@@ -61,7 +80,7 @@ async def classify_query(question: str) -> str:
     chain = prompt | llm | StrOutputParser()
     result = await chain.ainvoke({"question": question})
     result = result.strip().lower()
-    if result not in ("agent", "rag", "db", "chat"):
+    if result not in ("mcp", "agent", "rag", "db", "chat"):
         result = "rag"
     logger.info(f"Query classified as '{result}': {question[:50]}")
     return result
