@@ -9,8 +9,8 @@ import json
 import time
 import asyncio
 from deepeval import evaluate
-from deepeval.metrics import AnswerRelevancyMetric, TaskCompletionMetric
-from deepeval.test_case import LLMTestCase
+from deepeval.metrics import AnswerRelevancyMetric, TaskCompletionMetric, ToolCorrectnessMetric
+from deepeval.test_case import LLMTestCase, ToolCall
 from agents.single.hr_advisor import run_hr_advisor_with_mcp
 
 MCP_SERVER_URL = "http://localhost:8002/mcp"
@@ -24,14 +24,18 @@ def get_mcp_response(question: str):
 
 def build_mcp_test_case(item: dict) -> LLMTestCase:
     result = get_mcp_response(item["input"])
+    tools_called = [ToolCall(name=tool) for tool in result.tools_used]
+    expected_tools = [ToolCall(name=item["expected_mcp_tool"])]
     return LLMTestCase(
         input=item["input"],
         actual_output=result.answer,
         expected_output=item["expected_output"],
+        tools_called=tools_called,
+        expected_tools=expected_tools,
     )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mcp_golden_set():
     dataset_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -42,10 +46,11 @@ def mcp_golden_set():
         return json.load(f)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def mcp_metrics():
     return {
         "task_completion": TaskCompletionMetric(threshold=0.7, model="gpt-4o"),
+        "tool_correctness": ToolCorrectnessMetric(threshold=0.8),
         "answer_relevancy": AnswerRelevancyMetric(threshold=0.7, model="gpt-4o"),
     }
 
@@ -56,7 +61,11 @@ def test_mcp_read_tools(mcp_golden_set, mcp_metrics):
     test_cases = [build_mcp_test_case(item) for item in items]
     results = evaluate(
         test_cases=test_cases,
-        metrics=[mcp_metrics["task_completion"], mcp_metrics["answer_relevancy"]],
+        metrics=[
+            mcp_metrics["task_completion"],
+            mcp_metrics["tool_correctness"],
+            mcp_metrics["answer_relevancy"],
+        ],
     )
     assert all(r.success for r in results.test_results)
 
@@ -67,7 +76,11 @@ def test_mcp_write_tool(mcp_golden_set, mcp_metrics):
     test_cases = [build_mcp_test_case(item) for item in items]
     results = evaluate(
         test_cases=test_cases,
-        metrics=[mcp_metrics["task_completion"], mcp_metrics["answer_relevancy"]],
+        metrics=[
+            mcp_metrics["task_completion"],
+            mcp_metrics["tool_correctness"],
+            mcp_metrics["answer_relevancy"],
+        ],
     )
     assert all(r.success for r in results.test_results)
 
@@ -83,18 +96,32 @@ def test_mcp_cancel_tool(mcp_golden_set, mcp_metrics):
     test_cases = [build_mcp_test_case(item) for item in items]
     results = evaluate(
         test_cases=test_cases,
-        metrics=[mcp_metrics["task_completion"], mcp_metrics["answer_relevancy"]],
+        metrics=[
+            mcp_metrics["task_completion"],
+            mcp_metrics["tool_correctness"],
+            mcp_metrics["answer_relevancy"],
+        ],
     )
     assert all(r.success for r in results.test_results)
 
 
 def test_mcp_multi_step(mcp_golden_set, mcp_metrics):
-    """Multi-step MCP sequences must handle both tools correctly."""
+    """Multi-step MCP sequences must handle both tools correctly.
+
+    expected_mcp_tool is the primary MCP tool for each entry. The agent
+    may also call Phase 4 direct tools (e.g. search_policies) — those are
+    not in expected_tools, so ToolCorrectnessMetric only verifies the
+    primary MCP tool was invoked, not that extra tools were absent.
+    """
     items = [i for i in mcp_golden_set if i["query_type"] == "multi_step"]
     test_cases = [build_mcp_test_case(item) for item in items]
     results = evaluate(
         test_cases=test_cases,
-        metrics=[mcp_metrics["task_completion"], mcp_metrics["answer_relevancy"]],
+        metrics=[
+            mcp_metrics["task_completion"],
+            mcp_metrics["tool_correctness"],
+            mcp_metrics["answer_relevancy"],
+        ],
     )
     assert all(r.success for r in results.test_results)
 

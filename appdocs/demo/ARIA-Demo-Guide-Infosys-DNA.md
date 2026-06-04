@@ -187,7 +187,7 @@ curl -s -X POST http://localhost:8000/mcp/query \
 | **2** *(Done)* | Document RAG, citations, two-way routing | + Faithfulness, ContextualPrecision, ContextualRecall |
 | **3** *(Done)* | Database RAG, NL-to-SQL, three-way routing | + Faithfulness (DB), AnswerRelevancy (DB), RoutingBoundary |
 | **4** *(Done)* | ReAct agent, 3 tools, four-way routing, reasoning trace | + TaskCompletion, ToolCorrectness, AnswerRelevancy |
-| **5** *(Done)* | MCP server, 5 action tools, first DB write + delete, 8-tool agent, five-way routing | + TaskCompletion (MCP), AnswerRelevancy (MCP), ToolRouting |
+| **5** *(Done)* | MCP server, 5 action tools, first DB write + delete, 8-tool agent, five-way routing | + TaskCompletion (MCP), ToolCorrectness (MCP), AnswerRelevancy (MCP) |
 | **6** | Multi-agent LangGraph | + StepEfficiency, PlanAdherence, PlanQuality |
 | **7** | Full eval suite + CI/CD | All metrics + regression pipeline |
 | **8** | Production polish | Monitoring dashboards + alerting |
@@ -560,10 +560,10 @@ PHASE 4 — Single Agent
 └── AnswerRelevancyMetric          Did the answer stay focused and on-point?
 
 PHASE 5 — MCP Tools
-├── TaskCompletionMetric (MCP)     Did the MCP action complete successfully?
-├── AnswerRelevancyMetric (MCP)    Is the action response focused and accurate?
-└── Tool Routing (assertion)       Did each question invoke the correct MCP tool?
-                                   Covers all 5 tools across 13 golden set entries.
+├── TaskCompletionMetric (MCP)        Did the MCP action complete successfully?
+├── ToolCorrectnessMetric (MCP)       Did the agent invoke the correct MCP tool?
+├── AnswerRelevancyMetric (MCP)       Is the action response focused and accurate?
+└── Tool Routing Boundary (assertion) Cross-entry check: all 5 tools across 13 entries.
 
 PHASE 6 — Multi-Agent LangGraph  (planned)
 ├── OrchestratorAccuracyMetric     Correct routing to specialist agents?
@@ -754,7 +754,7 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_read_tools -v
 ```
 
 ### test_mcp_read_tools *(~21 seconds)*
-> *"Three read tool questions — two leave balance checks via EMP-ID, one org chart lookup. TaskCompletionMetric at 0.98, AnswerRelevancy at 1.00."*
+> *"Three read tool questions — two leave balance checks via EMP-ID, one org chart lookup. Three metrics: TaskCompletion, ToolCorrectness, and AnswerRelevancy. ToolCorrectnessMetric confirms the agent called check_leave_balance or get_org_chart as expected — not a Phase 4 direct tool — for every EMP-ID question. TaskCompletion 0.98, ToolCorrectness 1.00, AnswerRelevancy 1.00."*
 
 ```bash
 # 2. Write tool — creates records that cancel tests depend on
@@ -762,7 +762,7 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_write_tool -v
 ```
 
 ### test_mcp_write_tool *(~21 seconds)*
-> *"Three write operations — Annual, Sick, and Emergency leave submissions for two different employees. Both metrics at 1.00 across all three. TaskCompletionMetric correctly recognises that submitting a leave request was completed, not just described."*
+> *"Three write operations — Annual, Sick, and Emergency leave submissions for two different employees. Three metrics: TaskCompletion, ToolCorrectness, and AnswerRelevancy. ToolCorrectnessMetric verifies submit_leave_request was called for each entry — not a read tool. TaskCompletionMetric correctly recognises that submitting a leave request was completed, not just described. All three metrics at 1.00 across all three entries."*
 
 ```bash
 # 3. Cancel tool — must run AFTER write tool (deletes what was submitted above)
@@ -770,12 +770,13 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_cancel_tool -v
 ```
 
 ### test_mcp_cancel_tool *(~21 seconds)*
-> *"Three cancel operations — cancelling the Annual, Sick, and Emergency leave records created in the write test. TaskCompletionMetric evaluates whether the deletion was confirmed correctly. Both write and delete now have LLM judge coverage. Together, write + cancel tests prove the complete leave management lifecycle."*
+> *"Three cancel operations — cancelling the Annual, Sick, and Emergency leave records created in the write test. Three metrics: TaskCompletion, ToolCorrectness, and AnswerRelevancy. ToolCorrectnessMetric verifies cancel_leave_request was invoked — not submit, not check. TaskCompletionMetric evaluates whether the deletion was confirmed correctly. Together, write + cancel tests with ToolCorrectnessMetric prove the complete leave management lifecycle at both the action and tool-selection level."*
 
 **Expected results:**
 ```
-Task Completion:   avg=1.00  pass=100%  total=3
-Answer Relevancy:  avg=1.00  pass=100%  total=3
+Task Completion:    avg=1.00  pass=100%  total=3
+Tool Correctness:   avg=1.00  pass=100%  total=3
+Answer Relevancy:   avg=1.00  pass=100%  total=3
 ```
 
 ```bash
@@ -784,7 +785,7 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
 ```
 
 ### test_mcp_multi_step *(~29 seconds)*
-> *"Three multi-step sequences — balance check plus policy lookup, org chart plus balance, submit leave plus confirm balance. Two MCP tool calls in a single reasoning loop. Task Completion 0.98, Answer Relevancy 0.95."*
+> *"Three multi-step sequences — balance check plus policy lookup, org chart plus balance, submit leave plus confirm balance. Three metrics: TaskCompletion, ToolCorrectness, and AnswerRelevancy. ToolCorrectnessMetric checks that the primary expected MCP tool was called for each entry — check_leave_balance, get_org_chart, or submit_leave_request. Additional tools the agent calls (like search_policies from Phase 4) are not in expected_tools, so they don't reduce the score. Task Completion 0.98, ToolCorrectness 1.00, Answer Relevancy 0.95."*
 
 **Run the complete Phase 5 suite in correct order:**
 
@@ -802,10 +803,10 @@ uv run deepeval test run evaluation/tests/test_mcp.py::test_mcp_multi_step -v
 | Test | Metrics | Avg Score | Pass Rate | Cases | Cost | Time |
 |---|---|---|---|---|---|---|
 | Tool routing boundary | Assertion (no judge) | 100% | **100%** | 13 | $0.000 | ~78s |
-| MCP read tools | TaskCompletion + AnswerRelevancy | 0.99 | **100%** | 3 | $0.024 | ~21s |
-| MCP write tool | TaskCompletion + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
-| MCP cancel tool | TaskCompletion + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
-| MCP multi-step | TaskCompletion + AnswerRelevancy | 0.97 | **100%** | 3 | $0.031 | ~29s |
+| MCP read tools | TaskCompletion + ToolCorrectness + AnswerRelevancy | 0.99 | **100%** | 3 | $0.024 | ~21s |
+| MCP write tool | TaskCompletion + ToolCorrectness + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
+| MCP cancel tool | TaskCompletion + ToolCorrectness + AnswerRelevancy | **1.00** | **100%** | 3 | $0.025 | ~21s |
+| MCP multi-step | TaskCompletion + ToolCorrectness + AnswerRelevancy | 0.98 | **100%** | 3 | $0.031 | ~29s |
 | **Total Phase 5** | | **0.99** | **100%** | **25** | **$0.105** | **~170s** |
 
 > *"$0.10 to evaluate a system that can write to and delete from a production database on behalf of users. That's the ROI of evaluation-first development."*
@@ -878,8 +879,8 @@ ARIA uses GPT-4o today. Swapping to Claude, Gemini, or a fine-tuned Llama model 
 **5. Agentic reasoning is measurable**
 Phase 4 demonstrates that agent behaviour — specifically tool selection — is fully measurable with `ToolCorrectnessMetric`. 1.00 across 10 diverse queries.
 
-**6. AI agents can perform and reverse actions safely**
-Phase 5 demonstrates that an AI agent can write to a production database (`submit_leave_request`) and delete from it (`cancel_leave_request`). DeepEval's `TaskCompletionMetric` correctly evaluates whether both operations completed. 1.00 across all 6 write and cancel test cases. The same evaluation framework that validates answers also validates actions and reversals.
+**6. AI agents can perform and reverse actions safely — and tool selection is measurable**
+Phase 5 demonstrates that an AI agent can write to a production database (`submit_leave_request`) and delete from it (`cancel_leave_request`). `ToolCorrectnessMetric` confirms the correct MCP tool was invoked for every entry — 1.00 across all 13 golden set cases. `TaskCompletionMetric` confirms the action itself completed correctly — 1.00 across all 6 write and cancel test cases. The same evaluation framework that validates answers also validates tool selection and action outcomes.
 
 **7. MCP is the enterprise integration standard**
 The Phase 5 MCP server runs independently of the agent — any MCP-compatible client can call the same tools without code changes.
