@@ -1,6 +1,6 @@
 # hr-intelligence-platform
 
-> A multi-agent GenAI platform for HR intelligence, built with LangGraph, RAG, MCP, and DeepEval on GPT-4o.
+> A multi-agent GenAI platform for HR intelligence, built with LangGraph, RAG, MCP, DeepEval, and an online evaluation dashboard on GPT-4o.
 
 ---
 
@@ -57,7 +57,8 @@ All paths ──► DeepEval evaluation hooks (tracing + metrics)
 | Backend API | FastAPI |
 | Frontend | Streamlit |
 | Database | PostgreSQL |
-| Evaluation | DeepEval + Confident AI |
+| Evaluation (offline) | DeepEval + Confident AI |
+| Evaluation (online) | DeepEval + SQLite + Streamlit Dashboard |
 | Containerization | Docker Compose |
 | Package Management | uv |
 | Language | Python 3.11 |
@@ -76,7 +77,8 @@ hr-genai-agent-platform/
 ├── pyproject.toml
 │
 ├── frontend/                          # Streamlit UI
-│   ├── app.py                         # Main entry point
+│   ├── app.py                         # Main entry point + five-way router
+│   ├── dashboard.py                   # Online eval metrics dashboard (Phase 6)
 │   ├── pages/
 │   │   ├── 01_chat.py                 # Employee chat interface
 │   │   ├── 02_hr_dashboard.py         # HR manager view
@@ -155,17 +157,24 @@ hr-genai-agent-platform/
 │
 ├── evaluation/                        # DeepEval integration
 │   ├── datasets/
+│   │   ├── chat_golden_set.json       # Ground truth Q&A for chat evals
 │   │   ├── rag_golden_set.json        # Ground truth Q&A for RAG evals
+│   │   ├── database_rag_golden_set.json # Ground truth for DB RAG evals
 │   │   ├── agent_golden_set.json      # Ground truth for agent evals
 │   │   └── mcp_golden_set.json        # Ground truth for MCP evals
 │   ├── tests/
 │   │   ├── test_chat.py               # Chat quality metrics
 │   │   ├── test_document_rag.py       # Document RAG metrics
 │   │   ├── test_database_rag.py       # Database RAG metrics
-│   │   ├── test_hybrid_rag.py         # Hybrid retrieval metrics
 │   │   ├── test_single_agent.py       # Single agent metrics
 │   │   ├── test_mcp.py                # MCP metrics
-│   │   └── test_multi_agent.py        # Multi-agent metrics
+│   │   └── test_multi_agent.py        # Multi-agent metrics (Phase 8)
+│   ├── online/                        # Online evaluation (Phase 6)
+│   │   ├── __init__.py
+│   │   ├── database.py                # SQLite schema + helpers
+│   │   ├── evaluator.py               # Background async evaluator
+│   │   ├── analytics.py               # Dashboard aggregation queries
+│   │   └── eval_logs.db               # SQLite database (gitignored)
 │   ├── metrics/
 │   │   └── custom_hr_metric.py        # Custom G-Eval for HR accuracy
 │   └── reports/
@@ -324,7 +333,83 @@ Give the agent real actions — not just retrieval but writes to the database.
 
 ---
 
-### Phase 6 — Multi-Agent LangGraph Orchestration
+### Phase 5 — MCP Server *(Complete)*
+
+**Goal:**
+Give the agent real actions — not just retrieval but writes and deletes to the database via the MCP protocol.
+
+**Components:**
+- FastMCP server on port 8002 with 5 tools:
+  - `check_leave_balance` — read leave balance by EMP-ID
+  - `submit_leave_request` — write new leave record (with duplicate prevention)
+  - `cancel_leave_request` — delete pending leave records (cancels all duplicates)
+  - `get_org_chart` — read org hierarchy by EMP-ID
+  - `policy_lookup` — semantic search via MCP
+- Dedicated `/mcp/query` FastAPI endpoint
+- Five-way router: `"chat"` / `"rag"` / `"db"` / `"agent"` / `"mcp"`
+- Streamlit `"mcp"` routing branch with write/delete confirmation banners
+
+**DeepEval Metrics:**
+- `TaskCompletionMetric`
+- `AnswerRelevancyMetric`
+- `ToolCorrectnessMetric` (via routing boundary assertion — deterministic, no LLM judge)
+
+**Exit Criteria:**
+EMP-ID queries route to `"mcp"`. Submit and cancel leave requests write/delete records in PostgreSQL. 19 DeepEval cases — 100% pass rate. $0.080 total cost.
+
+---
+
+### Phase 6 — Online Evaluation + Dashboard *(In Progress)*
+
+**Goal:**
+Every question asked in Streamlit is automatically evaluated by DeepEval in the background. Results accumulate in a local SQLite database. A dashboard page shows real-time quality metrics, score trends, cost tracking, and low-score alerts across all five routing paths.
+
+**The shift from offline to online:**
+```
+Offline (Phases 1–5):
+Golden set → batch run → pass/fail CLI report → done
+
+Online (Phase 6):
+Real user query → ARIA answers → DeepEval scores in background
+→ stored in SQLite → live dashboard
+```
+
+**Components:**
+- `evaluation/online/database.py` — SQLite schema, `eval_logs` table, insert/query helpers
+- `evaluation/online/evaluator.py` — route-aware async background evaluator
+- `evaluation/online/analytics.py` — aggregation queries for dashboard charts
+- FastAPI `BackgroundTasks` integration across all 5 route endpoints
+- `frontend/dashboard.py` — Streamlit dashboard with:
+  - Overall pass rate gauge
+  - Score trend line chart (last 50 questions)
+  - Route distribution pie chart
+  - Per-route metric breakdown bar chart
+  - Low-score alert table (score < 0.7)
+  - Recent evaluations feed
+  - Cumulative cost tracker
+
+**Metrics Applied Per Route:**
+
+| Route | Online Metrics |
+|---|---|
+| `chat` | `AnswerRelevancyMetric` |
+| `rag` | `FaithfulnessMetric` + `AnswerRelevancyMetric` |
+| `db` | `FaithfulnessMetric` + `AnswerRelevancyMetric` |
+| `agent` | `TaskCompletionMetric` + `AnswerRelevancyMetric` |
+| `mcp` | `TaskCompletionMetric` + `AnswerRelevancyMetric` |
+
+**Why SQLite (not PostgreSQL):**
+Eval logs are append-only, never join with HR data, and the dashboard queries never hit performance limits at ARIA's scale. Zero setup, zero Docker dependency, gitignored. Migrates to ClickHouse in Phase 9 if needed at enterprise scale.
+
+**Why BackgroundTasks (not a queue):**
+FastAPI's built-in `BackgroundTasks` runs in the same process — no Redis or Celery needed. The user sees their answer immediately; evaluation happens asynchronously behind the scenes.
+
+**Exit Criteria:**
+Ask 10 questions in Streamlit. Open the dashboard. See 10+ evaluation rows with scores, routes, costs, and pass/fail status. Low-score alerts surface any question below 0.7.
+
+---
+
+### Phase 7 — Multi-Agent LangGraph Orchestration
 
 **Goal:**
 Route queries to specialist agents based on intent. Aggregate responses from multiple agents.
@@ -352,17 +437,18 @@ Route queries to specialist agents based on intent. Aggregate responses from mul
 
 ---
 
-### Phase 7 — DeepEval Full Suite + CI/CD
+### Phase 8 — DeepEval Full Suite + CI/CD
 
 **Goal:**
-Systematic evaluation of every component. Automated on every code push.
+Systematic evaluation of every component. Automated on every code push. Online dashboard promoted to production monitoring.
 
 **Components:**
-- Complete golden datasets (100 Q&A pairs)
+- Complete golden datasets (100+ Q&A pairs)
 - GitHub Actions CI pipeline
 - Confident AI dashboard integration
 - Custom HR accuracy G-Eval metric
-- Streamlit eval dashboard page
+- Online evaluation sampling strategy (1 in 10 questions in production)
+- SQLite → ClickHouse migration for enterprise-scale metric storage
 
 **All Metrics Running:**
 
@@ -370,18 +456,18 @@ Systematic evaluation of every component. Automated on every code push.
 |---|---|
 | Chat | `GEval`, `AnswerRelevancyMetric`, `HallucinationMetric` |
 | Document RAG | `FaithfulnessMetric`, `ContextualPrecisionMetric`, `ContextualRecallMetric` |
-| Database RAG | `FaithfulnessMetric`, `HallucinationMetric`, `ContextualRelevancyMetric` |
-| Single Agent | `TaskCompletionMetric`, `ToolCorrectnessMetric`, `GoalAccuracyMetric` |
-| MCP | `MCPTaskCompletionMetric`, `MCPUseMetric`, `MultiTurnMCPUseMetric` |
+| Database RAG | `FaithfulnessMetric`, `AnswerRelevancyMetric`, routing boundary assertion |
+| Single Agent | `TaskCompletionMetric`, `ToolCorrectnessMetric`, `AnswerRelevancyMetric` |
+| MCP Server | `TaskCompletionMetric`, `AnswerRelevancyMetric`, tool routing assertion |
 | Multi-Agent | `StepEfficiencyMetric`, `PlanAdherenceMetric`, `PlanQualityMetric` |
+| Online (all routes) | `FaithfulnessMetric`, `TaskCompletionMetric`, `AnswerRelevancyMetric` |
 
 **Exit Criteria:**
-Full eval suite runs in CI on push to main. Results visible in Confident AI dashboard.
-
+Full offline eval suite runs in CI on push to main. Online dashboard live with score trends and cost tracking. Results visible in Confident AI dashboard.
 
 ---
 
-### Phase 8 — Polish + Documentation
+### Phase 9 — Polish + Documentation
 
 **Goal:**
 Production-ready, portfolio-presentable project.
@@ -400,16 +486,16 @@ Production-ready, portfolio-presentable project.
 
 ## DeepEval Evaluation Coverage
 
-| Component | Metrics |
-|---|---|
-| LLM Chat | GEval, Answer Relevancy, Hallucination |
-| Document RAG | Faithfulness, Contextual Precision, Contextual Recall, Answer Relevancy, RAGAS |
-| Database RAG | Faithfulness, Contextual Relevancy, Hallucination |
-| Hybrid RAG | Contextual Relevancy, Answer Relevancy |
-| Single Agent | Task Completion, Tool Correctness, Goal Accuracy |
-| MCP Server | MCP Task Completion, MCP Use, Multi-Turn MCP Use |
-| Multi-Agent | Task Completion, Tool Correctness, Step Efficiency, Plan Adherence, Plan Quality |
-| All | Custom G-Eval: HR Accuracy |
+| Component | Mode | Metrics |
+|---|---|---|
+| LLM Chat | Offline | GEval, Answer Relevancy, Hallucination |
+| Document RAG | Offline | Faithfulness, Contextual Precision, Contextual Recall, Answer Relevancy |
+| Database RAG | Offline | Faithfulness, Answer Relevancy, Routing Boundary |
+| Single Agent | Offline | Task Completion, Tool Correctness, Answer Relevancy |
+| MCP Server | Offline | Task Completion, Answer Relevancy, Tool Correctness (routing assertion) |
+| Multi-Agent | Offline | Task Completion, Tool Correctness, Step Efficiency, Plan Adherence |
+| All Routes | **Online** | Faithfulness, Task Completion, Answer Relevancy (background, real-time) |
+| All | Offline | Custom G-Eval: HR Accuracy |
 
 ---
 
@@ -438,19 +524,25 @@ docker compose up -d
 uv sync
 
 # Seed the database
-python scripts/seed_database.py
+uv run python scripts/seed_database.py
 
 # Ingest HR documents
-python scripts/ingest_documents.py
+uv run python scripts/ingest_documents.py
 
-# Start the backend
-uvicorn backend.main:app --reload --port 8000
+# Start the MCP server (Terminal Tab 1)
+uv run python scripts/start_mcp_server.py
 
-# Start the frontend (new terminal)
-streamlit run frontend/app.py
+# Start the backend (Terminal Tab 2)
+uv run uvicorn backend.main:app --reload --port 8000
 
-# Run evaluations
-deepeval test run evaluation/tests/
+# Start the frontend (Terminal Tab 3)
+uv run streamlit run frontend/app.py
+
+# Start the eval dashboard (Terminal Tab 4 — Phase 6)
+uv run streamlit run frontend/dashboard.py --server.port 8502
+
+# Run offline evaluations
+uv run deepeval test run evaluation/tests/
 ```
 
 ---
@@ -490,4 +582,4 @@ MIT
 
 ## Author
 
-Built as a learning project to demonstrate end-to-end GenAI and Agentic AI application development using modern AI engineering practices, including integration with the open-source [DeepEval](https://github.com/confident-ai/deepeval) evaluation framework for systematically validating and measuring the performance of every AI component — LLM chat quality, RAG faithfulness and relevancy, MCP tool usage, single agent task completion, and multi-agent orchestration accuracy.
+Built as a learning project to demonstrate end-to-end GenAI and Agentic AI application development using modern AI engineering practices. The platform covers the full spectrum from simple LLM chat to multi-agent orchestration, including integration with the open-source [DeepEval](https://github.com/confident-ai/deepeval) evaluation framework in both **offline mode** (golden set batch evaluation) and **online mode** (real-time background evaluation with a live SQLite-backed dashboard). Every AI component — LLM chat quality, RAG faithfulness and relevancy, NL-to-SQL database queries, MCP tool usage, single agent task completion, and multi-agent orchestration — is systematically evaluated and measured.
